@@ -190,20 +190,22 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 ## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
 
-**Status:** `active` | **Progress:** 0/4 features shipped
+**Status:** `active` | **Progress:** 1/4 features shipped
 
 Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
 
 ### TUI Core Engine & CLI Entrypoint (`tui-core-engine`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security`, `cli-core-hardening` | **Refs:** `bd:pp-02n.1`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `dashboard-polish-security`, `cli-core-hardening` | **Refs:** `bd:pp-02n.1`
 
 Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer, OSC 52 copy, and pp view --tui CLI wiring.
 
-**Ship Criteria (0/3):**
-- [ ] Zero-dependency 2D cell-buffer renderer with ANSI diffing, synchronized output, color/NO_COLOR auto-detection, and escape sanitization
-- [ ] Stateful keyboard and SGR mouse input decoder with z-indexed hit-test regions, OSC 52 copy, and guaranteed raw-mode/alt-screen teardown
-- [ ] Explicit pp view --tui [--no-beads] CLI wiring rejecting non-TTY sessions and incompatible HTTP flags
+**Ship Criteria (3/3):**
+- [x] Zero-dependency 2D cell-buffer renderer with ANSI diffing, synchronized output, color/NO_COLOR auto-detection, and escape sanitization
+- [x] Stateful keyboard and SGR mouse input decoder with z-indexed hit-test regions, OSC 52 copy, and guaranteed raw-mode/alt-screen teardown
+- [x] Explicit pp view --tui [--no-beads] CLI wiring rejecting non-TTY sessions and incompatible HTTP flags
+
+> **Latest Pulse (2026-11-20T16:32:01.642Z):** Implemented src/tui/screen.ts, src/tui/input.ts, src/tui/app.ts stub, pp view --tui [--no-beads] CLI validation, and tests/v04-tui-core.test.ts (merged on main at 5c0bc66).
 
 ### TUI Views, Filters & Health Diagnostics (`tui-views-and-filters`)
 
