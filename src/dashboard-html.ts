@@ -494,28 +494,113 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     .status-cut, .status-archived { background: var(--red-soft); color: var(--red); }
 
     /* Dependency Graph View */
+    body.view-mode-graph .container {
+      max-width: none;
+      width: 100%;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 14px 20px 16px;
+    }
+    body.view-mode-graph header { padding-bottom: 10px; margin-bottom: 10px; }
+    body.view-mode-graph h1 { font-size: 1.45rem; }
+    body.view-mode-graph .subtitle { margin-top: 2px; font-size: 0.88rem; }
+    body.view-mode-graph .stats { gap: 8px; margin-bottom: 10px; }
+    body.view-mode-graph .stat-card {
+      padding: 7px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    body.view-mode-graph .stat-value { font-size: 1.15rem; margin-top: 0; }
+    body.view-mode-graph .controls-row { margin-bottom: 10px; gap: 8px; }
+    body.view-mode-graph .filters { padding: 7px 10px; }
+    body.view-mode-graph main#milestones {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: max(420px, 55vh);
+    }
+    body.view-mode-graph .graph-shell {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 12px 14px 14px;
+    }
     .graph-shell {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 18px;
     }
+    .graph-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
     .graph-legend {
       display: flex;
       flex-wrap: wrap;
-      gap: 14px;
+      gap: 12px;
       align-items: center;
-      margin-bottom: 14px;
+      margin-bottom: 0;
       font-size: 0.8rem;
       color: var(--muted);
     }
     .legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .legend-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-    .graph-scroll {
-      overflow-x: auto;
+    .graph-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+    }
+    .graph-ctrl-btn {
+      min-width: 28px;
+      height: 26px;
+      padding: 0 8px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .graph-ctrl-btn:hover { background: var(--accent-soft); color: var(--accent); }
+    .graph-zoom-readout { min-width: 50px; font-variant-numeric: tabular-nums; }
+    .graph-viewport {
+      flex: 1 1 auto;
+      min-height: 360px;
+      position: relative;
+      overflow: hidden;
       border: 1px solid var(--border);
       border-radius: 10px;
-      background: var(--bg);
+      background-color: var(--bg);
+      background-image: radial-gradient(color-mix(in srgb, var(--border) 65%, transparent) 1px, transparent 1px);
+      background-size: 24px 24px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+    .graph-viewport.is-dragging { cursor: grabbing; }
+    .graph-viewport.is-dragging .graph-node { cursor: grabbing; }
+    .graph-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      will-change: transform;
     }
     .graph-stage { position: relative; min-height: 240px; }
     .graph-edges {
@@ -527,10 +612,11 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       fill: none;
       stroke: var(--border);
       stroke-width: 1.8;
+      marker-end: url(#pp-arrow);
       transition: stroke 0.14s ease, opacity 0.14s ease, stroke-width 0.14s ease;
     }
-    .graph-edge.is-upstream { stroke: var(--amber); stroke-width: 2.6; opacity: 1; }
-    .graph-edge.is-downstream { stroke: var(--green); stroke-width: 2.6; opacity: 1; }
+    .graph-edge.is-upstream { stroke: var(--amber); stroke-width: 2.6; opacity: 1; marker-end: url(#pp-arrow-up); }
+    .graph-edge.is-downstream { stroke: var(--green); stroke-width: 2.6; opacity: 1; marker-end: url(#pp-arrow-down); }
     .graph-edge.is-dimmed { opacity: 0.18; }
     .graph-node {
       position: absolute;
@@ -800,7 +886,9 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       noteDrafts: {},
       feedback: null,
       saving: false,
+      graphCamera: { scale: 1, tx: 0, ty: 0, initialized: false, layoutKey: "" },
     };
+    let activeGraphApi = null;
 
     function apiUrl(path) {
       return (PP_RUNTIME.apiBase || "") + path;
@@ -1090,6 +1178,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
     function renderGraphView(container, data, filteredFeatures) {
       if (filteredFeatures.length === 0) {
+        activeGraphApi = null;
         container.innerHTML = '<div class="graph-shell"><p class="empty-msg">No features match the active filter.</p></div>';
         return;
       }
@@ -1122,43 +1211,75 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         computeLayer(f.id, new Set());
       }
 
-      const cols = new Map();
+      const rows = new Map();
       let maxLayer = 0;
       for (const f of filteredFeatures) {
         const layer = layerMap.get(f.id) || 0;
         maxLayer = Math.max(maxLayer, layer);
-        if (!cols.has(layer)) cols.set(layer, []);
-        cols.get(layer).push(f);
+        if (!rows.has(layer)) rows.set(layer, []);
+        rows.get(layer).push(f);
       }
 
-      let maxRows = 0;
-      for (const [, list] of cols) {
-        list.sort((a, b) => {
-          const ma = milestoneOrder.get(a.milestone) ?? 9999;
-          const mb = milestoneOrder.get(b.milestone) ?? 9999;
-          if (ma !== mb) return ma - mb;
-          if (a.order !== b.order) return a.order - b.order;
-          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-        });
-        maxRows = Math.max(maxRows, list.length);
+      function compareBase(a, b) {
+        const ma = milestoneOrder.get(a.milestone) ?? 9999;
+        const mb = milestoneOrder.get(b.milestone) ?? 9999;
+        if (ma !== mb) return ma - mb;
+        if (a.order !== b.order) return a.order - b.order;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       }
 
-      const NODE_W = 244;
+      const colIndexMap = new Map();
+      for (let layer = 0; layer <= maxLayer; layer++) {
+        const list = rows.get(layer) || [];
+        if (layer === 0) {
+          list.sort(compareBase);
+        } else {
+          list.sort((a, b) => {
+            function avgParentCol(feat) {
+              let sum = 0;
+              let count = 0;
+              for (const dep of feat.depends_on || []) {
+                if (visibleSet.has(dep) && colIndexMap.has(dep)) {
+                  sum += colIndexMap.get(dep);
+                  count += 1;
+                }
+              }
+              return count > 0 ? sum / count : Number.POSITIVE_INFINITY;
+            }
+            const pa = avgParentCol(a);
+            const pb = avgParentCol(b);
+            if (Math.abs(pa - pb) > 0.001) return pa - pb;
+            return compareBase(a, b);
+          });
+        }
+        list.forEach((f, idx) => colIndexMap.set(f.id, idx));
+      }
+
+      const NODE_W = 248;
       const NODE_H = 92;
-      const COL_GAP = 68;
-      const ROW_GAP = 18;
-      const PAD = 24;
+      const COL_GAP = 24;
+      const ROW_GAP = 64;
+      const PAD = 40;
 
-      const stageW = Math.max(720, PAD * 2 + (maxLayer + 1) * NODE_W + maxLayer * COL_GAP);
-      const stageH = Math.max(240, PAD * 2 + maxRows * NODE_H + Math.max(0, maxRows - 1) * ROW_GAP);
+      let maxRowW = 0;
+      for (let layer = 0; layer <= maxLayer; layer++) {
+        const list = rows.get(layer) || [];
+        const rowW = list.length * NODE_W + Math.max(0, list.length - 1) * COL_GAP;
+        maxRowW = Math.max(maxRowW, rowW);
+      }
+
+      const stageW = Math.max(760, PAD * 2 + maxRowW);
+      const stageH = Math.max(280, PAD * 2 + (maxLayer + 1) * NODE_H + maxLayer * ROW_GAP);
 
       const pos = new Map();
-      for (let col = 0; col <= maxLayer; col++) {
-        const list = cols.get(col) || [];
-        list.forEach((f, rowIdx) => {
+      for (let layer = 0; layer <= maxLayer; layer++) {
+        const list = rows.get(layer) || [];
+        const rowW = list.length * NODE_W + Math.max(0, list.length - 1) * COL_GAP;
+        const startX = Math.round((stageW - rowW) / 2);
+        list.forEach((f, idx) => {
           pos.set(f.id, {
-            x: PAD + col * (NODE_W + COL_GAP),
-            y: PAD + rowIdx * (NODE_H + ROW_GAP),
+            x: startX + idx * (NODE_W + COL_GAP),
+            y: PAD + layer * (NODE_H + ROW_GAP),
           });
         });
       }
@@ -1207,13 +1328,13 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       const svgPaths = edges.map((e) => {
         const p1 = pos.get(e.from);
         const p2 = pos.get(e.to);
-        const x1 = p1.x + NODE_W;
-        const y1 = p1.y + NODE_H / 2;
-        const x2 = p2.x;
-        const y2 = p2.y + NODE_H / 2;
-        const dx = Math.max(28, Math.abs(x2 - x1) * 0.48);
-        const d = "M " + x1 + " " + y1 + " C " + (x1 + dx) + " " + y1 + ", " + (x2 - dx) + " " + y2 + ", " + x2 + " " + y2;
-        return '<path class="graph-edge" data-from="' + esc(e.from) + '" data-to="' + esc(e.to) + '" d="' + d + '" marker-end="url(#pp-arrow)" />';
+        const x1 = p1.x + NODE_W / 2;
+        const y1 = p1.y + NODE_H;
+        const x2 = p2.x + NODE_W / 2;
+        const y2 = p2.y;
+        const dy = Math.max(32, Math.abs(y2 - y1) * 0.45);
+        const d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + dy) + ", " + x2 + " " + (y2 - dy) + ", " + x2 + " " + y2;
+        return '<path class="graph-edge" data-from="' + esc(e.from) + '" data-to="' + esc(e.to) + '" d="' + d + '" />';
       }).join("");
 
       const nodesHtml = filteredFeatures.map((f) => {
@@ -1228,22 +1349,236 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
       container.innerHTML =
         '<div class="graph-shell">' +
-          '<div class="graph-legend">' +
-            '<span>Hover or focus a feature to trace dependencies:</span>' +
-            '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span> Selected</span>' +
-            '<span class="legend-item"><span class="legend-swatch" style="background:var(--amber)"></span> Upstream prerequisites</span>' +
-            '<span class="legend-item"><span class="legend-swatch" style="background:var(--green)"></span> Downstream dependents</span>' +
+          '<div class="graph-bar">' +
+            '<div class="graph-legend">' +
+              '<span>Hover or focus a feature to trace dependencies · Drag to pan · Scroll to zoom</span>' +
+              '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span> Selected</span>' +
+              '<span class="legend-item"><span class="legend-swatch" style="background:var(--amber)"></span> Upstream prerequisites</span>' +
+              '<span class="legend-item"><span class="legend-swatch" style="background:var(--green)"></span> Downstream dependents</span>' +
+            "</div>" +
+            '<div class="graph-controls" role="toolbar" aria-label="Dependency graph zoom controls">' +
+              '<button type="button" class="graph-ctrl-btn" id="graph-zoom-out" aria-label="Zoom out" title="Zoom out (-)">−</button>' +
+              '<button type="button" class="graph-ctrl-btn graph-zoom-readout" id="graph-zoom-reset" aria-label="Reset zoom to 100%" title="Reset view (0)">100%</button>' +
+              '<button type="button" class="graph-ctrl-btn" id="graph-zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>' +
+              '<button type="button" class="graph-ctrl-btn" id="graph-zoom-fit" aria-label="Fit graph to view" title="Fit graph to view (F)">Fit</button>' +
+            "</div>" +
           "</div>" +
-          '<div class="graph-scroll">' +
-            '<div class="graph-stage" style="width:' + stageW + "px;height:" + stageH + 'px">' +
-              '<svg class="graph-edges" width="' + stageW + '" height="' + stageH + '" viewBox="0 0 ' + stageW + " " + stageH + '">' +
-                '<defs><marker id="pp-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--muted)" /></marker></defs>' +
-                svgPaths +
-              "</svg>" +
-              nodesHtml +
+          '<div class="graph-viewport" id="graph-viewport">' +
+            '<div class="graph-canvas" id="graph-canvas">' +
+              '<div class="graph-stage" style="width:' + stageW + "px;height:" + stageH + 'px">' +
+                '<svg class="graph-edges" width="' + stageW + '" height="' + stageH + '" viewBox="0 0 ' + stageW + " " + stageH + '">' +
+                  "<defs>" +
+                    '<marker id="pp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--muted)" /></marker>' +
+                    '<marker id="pp-arrow-up" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--amber)" /></marker>' +
+                    '<marker id="pp-arrow-down" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--green)" /></marker>' +
+                  "</defs>" +
+                  svgPaths +
+                "</svg>" +
+                nodesHtml +
+              "</div>" +
             "</div>" +
           "</div>" +
         "</div>";
+
+      const viewportEl = document.getElementById("graph-viewport");
+      const canvasEl = document.getElementById("graph-canvas");
+      const zoomOutBtn = document.getElementById("graph-zoom-out");
+      const zoomResetBtn = document.getElementById("graph-zoom-reset");
+      const zoomInBtn = document.getElementById("graph-zoom-in");
+      const zoomFitBtn = document.getElementById("graph-zoom-fit");
+
+      const MIN_ZOOM = 0.25;
+      const MAX_ZOOM = 2.0;
+      const cam = state.graphCamera;
+
+      function clamp(val, minVal, maxVal) {
+        return Math.min(maxVal, Math.max(minVal, val));
+      }
+
+      function getViewportSize() {
+        return {
+          vw: Math.max(320, viewportEl.clientWidth || 760),
+          vh: Math.max(320, viewportEl.clientHeight || 420),
+        };
+      }
+
+      function clampCamera() {
+        const { vw, vh } = getViewportSize();
+        const scaledW = stageW * cam.scale;
+        const scaledH = stageH * cam.scale;
+        const padX = Math.min(80, Math.floor(vw * 0.35), Math.floor(scaledW * 0.5));
+        const padY = Math.min(80, Math.floor(vh * 0.35), Math.floor(scaledH * 0.5));
+        cam.tx = clamp(cam.tx, padX - scaledW, vw - padX);
+        cam.ty = clamp(cam.ty, padY - scaledH, vh - padY);
+      }
+
+      function applyCamera() {
+        canvasEl.style.transform = "translate(" + Math.round(cam.tx) + "px, " + Math.round(cam.ty) + "px) scale(" + cam.scale + ")";
+        canvasEl.dataset.scale = cam.scale.toFixed(3);
+        if (zoomResetBtn) {
+          zoomResetBtn.textContent = Math.round(cam.scale * 100) + "%";
+        }
+        const gridStep = Math.max(10, Math.round(24 * cam.scale));
+        viewportEl.style.backgroundSize = gridStep + "px " + gridStep + "px";
+        viewportEl.style.backgroundPosition = Math.round(cam.tx) + "px " + Math.round(cam.ty) + "px";
+      }
+
+      function resetView() {
+        const { vw, vh } = getViewportSize();
+        cam.scale = 1;
+        const scaledW = stageW * cam.scale;
+        const scaledH = stageH * cam.scale;
+        cam.tx = Math.round((vw - scaledW) / 2);
+        cam.ty = scaledH <= vh - 32 ? Math.round((vh - scaledH) / 2) : 20;
+        clampCamera();
+        applyCamera();
+      }
+
+      function fitView() {
+        const { vw, vh } = getViewportSize();
+        const rawScale = Math.min(1, (vw - 56) / stageW, (vh - 56) / stageH);
+        cam.scale = clamp(rawScale, MIN_ZOOM, 1);
+        const scaledW = stageW * cam.scale;
+        const scaledH = stageH * cam.scale;
+        cam.tx = Math.round((vw - scaledW) / 2);
+        cam.ty = Math.round((vh - scaledH) / 2);
+        clampCamera();
+        applyCamera();
+      }
+
+      function zoomAt(nextScale, cx, cy) {
+        const clamped = clamp(nextScale, MIN_ZOOM, MAX_ZOOM);
+        if (Math.abs(clamped - cam.scale) < 0.0001) return;
+        const worldX = (cx - cam.tx) / cam.scale;
+        const worldY = (cy - cam.ty) / cam.scale;
+        cam.scale = clamped;
+        cam.tx = cx - worldX * clamped;
+        cam.ty = cy - worldY * clamped;
+        clampCamera();
+        applyCamera();
+      }
+
+      function zoomFromCenter(factor) {
+        const { vw, vh } = getViewportSize();
+        zoomAt(cam.scale * factor, vw / 2, vh / 2);
+      }
+
+      const layoutKey = filteredFeatures.map((f) => f.id).join(",") + "|" + stageW + "x" + stageH;
+      if (!cam.initialized || cam.layoutKey !== layoutKey) {
+        cam.initialized = true;
+        cam.layoutKey = layoutKey;
+        resetView();
+      } else {
+        clampCamera();
+        applyCamera();
+      }
+
+      let dragState = null;
+      let suppressNextClick = false;
+
+      viewportEl.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest(".graph-controls")) return;
+        suppressNextClick = false;
+        dragState = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startTx: cam.tx,
+          startTy: cam.ty,
+          dragging: false,
+        };
+      });
+
+      viewportEl.addEventListener("pointermove", (e) => {
+        if (!dragState || e.pointerId !== dragState.pointerId) return;
+        const dx = e.clientX - dragState.startX;
+        const dy = e.clientY - dragState.startY;
+        if (!dragState.dragging) {
+          if (Math.hypot(dx, dy) <= 5) return;
+          dragState.dragging = true;
+          viewportEl.classList.add("is-dragging");
+          try {
+            viewportEl.setPointerCapture(e.pointerId);
+          } catch {}
+        }
+        cam.tx = dragState.startTx + dx;
+        cam.ty = dragState.startTy + dy;
+        clampCamera();
+        applyCamera();
+      });
+
+      function endDrag(e) {
+        if (!dragState || e.pointerId !== dragState.pointerId) return;
+        if (dragState.dragging) {
+          suppressNextClick = true;
+          viewportEl.classList.remove("is-dragging");
+          try {
+            if (viewportEl.hasPointerCapture(e.pointerId)) {
+              viewportEl.releasePointerCapture(e.pointerId);
+            }
+          } catch {}
+        }
+        dragState = null;
+      }
+
+      viewportEl.addEventListener("pointerup", endDrag);
+      viewportEl.addEventListener("pointercancel", endDrag);
+      viewportEl.addEventListener("lostpointercapture", () => {
+        viewportEl.classList.remove("is-dragging");
+        dragState = null;
+      });
+
+      viewportEl.addEventListener("click", (e) => {
+        if (suppressNextClick) {
+          suppressNextClick = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+
+      viewportEl.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const rect = viewportEl.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const step = e.ctrlKey ? -e.deltaY * 0.01 : -e.deltaY * 0.0014;
+        const factor = Math.exp(Math.max(-0.35, Math.min(0.35, step)));
+        zoomAt(cam.scale * factor, cx, cy);
+      }, { passive: false });
+
+      if (zoomInBtn) zoomInBtn.addEventListener("click", () => zoomFromCenter(1.2));
+      if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => zoomFromCenter(1 / 1.2));
+      if (zoomResetBtn) zoomResetBtn.addEventListener("click", resetView);
+      if (zoomFitBtn) zoomFitBtn.addEventListener("click", fitView);
+
+      function ensureNodeVisible(el) {
+        const vpRect = viewportEl.getBoundingClientRect();
+        const nodeRect = el.getBoundingClientRect();
+        const margin = 24;
+        let dx = 0;
+        let dy = 0;
+        if (nodeRect.left < vpRect.left + margin) dx = vpRect.left + margin - nodeRect.left;
+        else if (nodeRect.right > vpRect.right - margin) dx = vpRect.right - margin - nodeRect.right;
+        if (nodeRect.top < vpRect.top + margin) dy = vpRect.top + margin - nodeRect.top;
+        else if (nodeRect.bottom > vpRect.bottom - margin) dy = vpRect.bottom - margin - nodeRect.bottom;
+        if (dx !== 0 || dy !== 0) {
+          cam.tx += dx;
+          cam.ty += dy;
+          clampCamera();
+          applyCamera();
+        }
+      }
+
+      activeGraphApi = {
+        zoomIn: () => zoomFromCenter(1.2),
+        zoomOut: () => zoomFromCenter(1 / 1.2),
+        reset: resetView,
+        fit: fitView,
+        onResize: () => {
+          clampCamera();
+          applyCamera();
+        },
+      };
 
       const nodeEls = Array.from(container.querySelectorAll(".graph-node"));
       const edgeEls = Array.from(container.querySelectorAll(".graph-edge"));
@@ -1279,7 +1614,10 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       for (const el of nodeEls) {
         const nid = el.getAttribute("data-feature-id");
         el.addEventListener("mouseenter", () => applyHighlight(nid));
-        el.addEventListener("focus", () => applyHighlight(nid));
+        el.addEventListener("focus", () => {
+          ensureNodeVisible(el);
+          applyHighlight(nid);
+        });
         el.addEventListener("mouseleave", () => applyHighlight(null));
         el.addEventListener("blur", () => applyHighlight(null));
       }
@@ -1403,12 +1741,16 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         tab.setAttribute("aria-selected", String(active));
       });
 
+      document.body.classList.toggle("view-mode-graph", state.viewMode === "graph");
+
       const container = document.getElementById("milestones");
       if (state.viewMode === "graph") {
         renderGraphView(container, data, filteredFeatures);
       } else if (state.viewMode === "board") {
+        activeGraphApi = null;
         renderBoardView(container, data, filteredFeatures);
       } else {
+        activeGraphApi = null;
         renderCardsView(container, data, visibleMilestones);
       }
 
@@ -1635,7 +1977,26 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         } else if (state.selectedFeatureId) {
           closeDrawer();
         }
+      } else if (state.viewMode === "graph" && activeGraphApi && !state.selectedFeatureId) {
+        const activeTag = document.activeElement && document.activeElement.tagName;
+        if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT") return;
+        if (e.key === "+" || e.key === "=") {
+          e.preventDefault();
+          activeGraphApi.zoomIn();
+        } else if (e.key === "-") {
+          e.preventDefault();
+          activeGraphApi.zoomOut();
+        } else if (e.key === "0") {
+          e.preventDefault();
+          activeGraphApi.reset();
+        } else if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          activeGraphApi.fit();
+        }
       }
+    });
+    window.addEventListener("resize", () => {
+      if (activeGraphApi) activeGraphApi.onResize();
     });
 
     syncThemeButton();

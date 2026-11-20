@@ -209,6 +209,75 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await page.locator("#tab-graph").click();
       await page.waitForSelector('.graph-node[data-feature-id="node-b"]');
 
+      // 1. Verify full-window layout & top-to-bottom waterfall ordering
+      expect(await page.evaluate(() => document.body.classList.contains("view-mode-graph"))).toBe(true);
+      const vpBox = await page.locator("#graph-viewport").boundingBox();
+      expect(vpBox).not.toBeNull();
+      expect(vpBox!.height).toBeGreaterThanOrEqual(450);
+      expect(vpBox!.width).toBeGreaterThanOrEqual(1280);
+
+      const boxA = await page.locator('.graph-node[data-feature-id="node-a"]').boundingBox();
+      const boxB = await page.locator('.graph-node[data-feature-id="node-b"]').boundingBox();
+      const boxC = await page.locator('.graph-node[data-feature-id="node-c"]').boundingBox();
+      expect(boxA).not.toBeNull();
+      expect(boxB).not.toBeNull();
+      expect(boxC).not.toBeNull();
+      expect(boxA!.y).toBeLessThan(boxB!.y);
+      expect(boxB!.y).toBeLessThan(boxC!.y);
+
+      // 2. Verify toolbar zoom, fit-to-view, reset, and mouse wheel zoom
+      const initialScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(initialScale).toBe(1);
+
+      await page.locator("#graph-zoom-out").click();
+      const zoomedOutScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(zoomedOutScale).toBeLessThan(initialScale);
+      expect(await page.locator("#graph-zoom-reset").textContent()).toBe(
+        `${Math.round(zoomedOutScale * 100)}%`
+      );
+
+      await page.locator("#graph-zoom-in").click();
+      const zoomedInScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(zoomedInScale).toBeGreaterThan(zoomedOutScale);
+
+      await page.locator("#graph-zoom-fit").click();
+      const vpFitBox = await page.locator("#graph-viewport").boundingBox();
+      const fittedNodes = await page.locator(".graph-node").evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        })
+      );
+      for (const n of fittedNodes) {
+        expect(n.left).toBeGreaterThanOrEqual(vpFitBox!.x - 1);
+        expect(n.right).toBeLessThanOrEqual(vpFitBox!.x + vpFitBox!.width + 1);
+        expect(n.top).toBeGreaterThanOrEqual(vpFitBox!.y - 1);
+        expect(n.bottom).toBeLessThanOrEqual(vpFitBox!.y + vpFitBox!.height + 1);
+      }
+
+      await page.locator("#graph-zoom-reset").click();
+      expect(Number(await page.locator("#graph-canvas").getAttribute("data-scale"))).toBe(1);
+      expect(await page.locator("#graph-zoom-reset").textContent()).toBe("100%");
+
+      // Wheel zoom decreases scale
+      await page.mouse.move(vpBox!.x + vpBox!.width / 2, vpBox!.y + vpBox!.height / 2);
+      await page.mouse.wheel(0, 240);
+      const wheelScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(wheelScale).toBeLessThan(1);
+
+      // 3. Click-and-drag panning starting over a node updates transform without opening drawer
+      const beforeTransform = await page.locator("#graph-canvas").evaluate((el) => el.style.transform);
+      const dragStartBox = await page.locator('.graph-node[data-feature-id="node-b"]').boundingBox();
+      const startX = dragStartBox!.x + dragStartBox!.width / 2;
+      const startY = dragStartBox!.y + dragStartBox!.height / 2;
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + 75, startY + 55, { steps: 6 });
+      await page.mouse.up();
+      const afterTransform = await page.locator("#graph-canvas").evaluate((el) => el.style.transform);
+      expect(afterTransform).not.toBe(beforeTransform);
+      expect(await page.locator("#drawer-backdrop.open").count()).toBe(0);
+
       // Focusing middle node B highlights upstream A, downstream C, and dims unrelated D
       await page.locator('.graph-node[data-feature-id="node-b"]').focus();
       const highlightState = await page.evaluate(() => ({
@@ -224,16 +293,17 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       expect(highlightState.c).toContain("is-downstream");
       expect(highlightState.d).toContain("is-dimmed");
 
-      // Clicking node C opens drawer
+      // Plain clicking node C after drag opens drawer
       await page.locator('.graph-node[data-feature-id="node-c"]').click();
       await page.waitForSelector("#drawer-backdrop.open");
       expect(await page.locator("#drawer-title").textContent()).toBe("Dashboard View");
       await page.keyboard.press("Escape");
 
-      // Switch to Status Board view with active search filter shared across views
+      // Switch to Status Board view removes full-height graph body class and shares filter
       await page.locator("#filter-search").fill("Docs");
       await page.locator("#tab-board").click();
       await page.waitForSelector('.board-card[data-feature-id="node-d"]');
+      expect(await page.evaluate(() => document.body.classList.contains("view-mode-graph"))).toBe(false);
       expect(await page.locator(".board-card").count()).toBe(1);
 
       // Clear filter and press Enter on Status Board card opens drawer
