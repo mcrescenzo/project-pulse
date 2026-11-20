@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
+import { exportStaticHtml } from "./export";
 import { joinOrStartHub } from "./hub";
 import { runMcpServer } from "./mcp";
 import {
@@ -40,6 +41,7 @@ const VALUE_FLAGS = new Set([
   "remove-criterion",
   "reassign",
   "port",
+  "out",
 ]);
 
 const BOOLEAN_FLAGS = new Set([
@@ -54,6 +56,7 @@ const BOOLEAN_FLAGS = new Set([
   "no-open",
   "standalone",
   "force",
+  "html",
 ]);
 
 const GLOBAL_VALUE_FLAGS = new Set(["root"]);
@@ -102,6 +105,7 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   render: { value: [], boolean: [] },
   check: { value: [], boolean: ["beads"] },
   view: { value: ["port"], boolean: ["no-open", "standalone"] },
+  export: { value: ["out"], boolean: ["html", "beads"] },
   mcp: { value: [], boolean: [] },
 };
 
@@ -241,6 +245,7 @@ Usage:
   pp render [--json]
   pp check [--beads] [--json]
   pp view [--port <n>] [--standalone] [--no-open]
+  pp export --html [--out <path|->] [--beads] [--json]
   pp mcp
   pp --help | --version
 
@@ -700,6 +705,42 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         );
         if (!noOpen) openBrowser(hubResult.url);
         await waitForShutdown(() => hubResult.handle.stop());
+        return 0;
+      }
+
+      case "export": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'export'`);
+        }
+        if (!parsed.booleans.has("html")) {
+          throw new Error("Usage: pp export --html [--out <path|->] [--beads] [--json]");
+        }
+        const rawOut = getFlag(parsed, "out");
+        const outPath =
+          rawOut === "-" ? "-" : rawOut !== undefined ? resolve(cwd, rawOut) : undefined;
+        const result = await exportStaticHtml(rootDir, {
+          outPath,
+          beads: parsed.booleans.has("beads"),
+          beadsClient,
+        });
+        if (jsonMode) {
+          console.log(
+            JSON.stringify(
+              {
+                ok: true,
+                outPath: result.outPath,
+                bytes: result.bytes,
+                ...(result.outPath === null ? { html: result.html } : {}),
+              },
+              null,
+              2
+            )
+          );
+        } else if (result.outPath === null) {
+          process.stdout.write(result.html);
+        } else {
+          console.log(`Exported static roadmap HTML to ${result.outPath} (${result.bytes} bytes)`);
+        }
         return 0;
       }
 

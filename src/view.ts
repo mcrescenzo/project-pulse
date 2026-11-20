@@ -97,6 +97,50 @@ export function validateMutationRequest(
 }
 
 /**
+ * Builds the JSON payload shared between `/api/roadmap` and static HTML export.
+ */
+export async function buildRoadmapViewPayload(
+  service: RoadmapService,
+  options: { beads?: boolean; beadsClient?: BeadsClient } = {}
+): Promise<RoadmapViewPayload> {
+  const loaded = service.load();
+  const beads = options.beads ?? loaded.config.integrations.beads.enabled;
+  const check = await service.checkWithBeads({
+    beads,
+    beadsClient: options.beadsClient,
+    loaded,
+  });
+
+  const knownIds = new Set(loaded.milestones.map((m) => m.id));
+  const defaultId = loaded.config.defaults.milestone;
+  const milestones = [...loaded.milestones];
+  if (
+    !knownIds.has(defaultId) &&
+    loaded.features.some((f) => f.milestone === defaultId)
+  ) {
+    milestones.push({
+      id: defaultId,
+      title: "Backlog",
+      order: 9999,
+      status: "planned",
+      description: "Features queued without a specific release milestone.",
+    });
+  }
+
+  return {
+    config: loaded.config,
+    milestones,
+    features: loaded.features,
+    check: {
+      ok: check.ok,
+      errors: check.errors,
+      warnings: check.warnings,
+    },
+    beads: check.beads ?? {},
+  };
+}
+
+/**
  * Creates an isolated watcher + SSE + API handler slot for a single Project Pulse repository.
  */
 export function createProjectSlot(
@@ -158,43 +202,8 @@ export function createProjectSlot(
     }
   }, 25_000);
 
-  const getPayload = async (): Promise<RoadmapViewPayload> => {
-    const loaded = service.load();
-    const check = await service.checkWithBeads({
-      beads: loaded.config.integrations.beads.enabled,
-      beadsClient,
-      loaded,
-    });
-
-    const knownIds = new Set(loaded.milestones.map((m) => m.id));
-    const defaultId = loaded.config.defaults.milestone;
-    const milestones = [...loaded.milestones];
-    if (
-      !knownIds.has(defaultId) &&
-      loaded.features.some((f) => f.milestone === defaultId)
-    ) {
-      milestones.push({
-        id: defaultId,
-        title: "Backlog",
-        order: 9999,
-        status: "planned",
-        description: "Features queued without a specific release milestone.",
-      });
-    }
-
-    const beads: Record<string, BeadStatusInfo[]> = check.beads ?? {};
-    return {
-      config: loaded.config,
-      milestones,
-      features: loaded.features,
-      check: {
-        ok: check.ok,
-        errors: check.errors,
-        warnings: check.warnings,
-      },
-      beads,
-    };
-  };
+  const getPayload = async (): Promise<RoadmapViewPayload> =>
+    buildRoadmapViewPayload(service, { beadsClient });
 
   const handleRoadmap = async (): Promise<Response> => {
     try {

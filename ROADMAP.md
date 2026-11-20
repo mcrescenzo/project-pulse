@@ -173,14 +173,16 @@ Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server 
 
 ### Self-Contained Static HTML Export (`static-html-export`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.3`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.3`
 
 Generates a single self-contained offline HTML roadmap snapshot from .project-pulse/ for sharing without a local server.
 
-**Ship Criteria (0/3):**
-- [ ] pp export --html writes a single standalone HTML file with zero external network dependencies
-- [ ] Preserves milestone grouping, filters, search, theme toggle, and read-only detail drawer offline
-- [ ] Supports --out <path> and deterministic output verified by tests
+**Ship Criteria (3/3):**
+- [x] pp export --html writes a single standalone HTML file with zero external network dependencies
+- [x] Preserves milestone grouping, filters, search, theme toggle, and read-only detail drawer offline
+- [x] Supports --out <path> and deterministic output verified by tests
+
+> **Latest Pulse (2026-11-20T14:26:35.095Z):** Implemented src/export.ts and pp export --html with deterministic zero-network standalone HTML output, XSS-safe script escaping, --out support, and offline Chromium verification.
 
 ## v0.4 — Open-Source Public Release (`v0.4`)
 
