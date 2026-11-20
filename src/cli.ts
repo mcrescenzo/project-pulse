@@ -335,7 +335,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
   const beadsClient = deps.beadsClient ?? new CliBeadsClient();
 
   let cmd = rawCmd;
-  let subcmd = rawSubcmd;
+  let subcmd: string | undefined = rawSubcmd;
   if (!cmd) {
     if (service.isInitialized()) {
       cmd = "summary";

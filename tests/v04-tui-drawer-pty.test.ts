@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { BeadsClient } from "../src/beads";
@@ -7,6 +7,7 @@ import { RoadmapService } from "../src/store";
 import { TuiController } from "../src/tui/app";
 import type { InputEvent, TerminalSession } from "../src/tui/input";
 import type { ColorMode } from "../src/tui/screen";
+import { waitFor } from "./helpers/wait";
 
 class VirtualDrawerSession implements TerminalSession {
   width: number;
@@ -25,7 +26,7 @@ class VirtualDrawerSession implements TerminalSession {
 
   enter(opts: { mouse: boolean; hover: boolean }): void {
     this.entered = true;
-    this.mouseOpts = opts;
+    this.mouseOpts = { enabled: opts.mouse, hover: opts.hover };
   }
   leave(): void {
     this.entered = false;
@@ -188,7 +189,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
           title: "Hydrated Bead",
         },
       ]);
-      await new Promise((r) => setTimeout(r, 20));
+      await waitFor(() => !ctrl.getState().beadsLoading, "beads hydration");
       expect(ctrl.getState().beadsLoading).toBe(false);
 
       // Open drawer, confirm hydrated Beads ref displays cleanly, type draft note, and trigger external fs.watch write
@@ -199,7 +200,10 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
       session.typeText(ctrl, "Unsaved SSH draft");
       svc.addFeatureNote("tui-drawer", "External agent note");
 
-      await new Promise((r) => setTimeout(r, 320));
+      await waitFor(
+        () => ctrl.getBuffer().toPlainLines().join("\n").includes("External agent note"),
+        "fs.watch reload to render external note"
+      );
       expect(ctrl.getState().noteDrafts["tui-drawer"]).toBe("Unsaved SSH draft");
       expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("External agent note");
     } finally {
@@ -207,18 +211,16 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
     }
   });
 
-  test("headless PTY smoke test enters alt-screen, renders dashboard, and restores terminal cleanly on q", async () => {
+  test.skipIf(!Bun.which("python3"))("headless PTY smoke test enters alt-screen, renders dashboard, and restores terminal cleanly on q", async () => {
     seedProject(tempDir);
     const repoRoot = resolve(import.meta.dir, "..");
     const cliPath = join(repoRoot, "src", "cli.ts");
-    const hasPython = existsSync("/usr/bin/python3") || Bun.which("python3");
-    if (!hasPython) return;
 
     const pyScript = `
 import os, pty, select, subprocess, time, sys
 master, slave = pty.openpty()
 proc = subprocess.Popen(
-    ["bun", "run", sys.argv[1], "--root", sys.argv[2], "view", "--tui", "--no-beads"],
+    [sys.argv[3], "run", sys.argv[1], "--root", sys.argv[2], "view", "--tui", "--no-beads"],
     stdin=slave, stdout=slave, stderr=slave, close_fds=True,
     env={**os.environ, "TERM": "xterm-256color"}
 )
@@ -250,7 +252,7 @@ assert "\\x1b[?1049l" in out, "missing alt-screen leave"
 assert "Drawer TUI Project" in out, "missing rendered project title"
 sys.exit(rc)
 `;
-    const res = Bun.spawnSync(["python3", "-c", pyScript, cliPath, tempDir], {
+    const res = Bun.spawnSync(["python3", "-c", pyScript, cliPath, tempDir, process.execPath], {
       cwd: repoRoot,
       stdout: "pipe",
       stderr: "pipe",

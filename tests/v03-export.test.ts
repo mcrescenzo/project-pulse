@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,21 +7,7 @@ import { chromium, type Browser } from "playwright-core";
 import { runCli } from "../src/cli";
 import { exportStaticHtml } from "../src/export";
 import { RoadmapService } from "../src/store";
-
-function resolveChromiumExecutable(): string | null {
-  const candidates = [
-    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-  ].filter((p): p is string => Boolean(p));
-
-  for (const path of candidates) {
-    if (existsSync(path)) return path;
-  }
-  return null;
-}
+import { resolveChromiumExecutable } from "./helpers/chromium";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const testUi = CHROMIUM_PATH ? test : test.skip;

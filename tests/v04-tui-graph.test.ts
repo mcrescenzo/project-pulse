@@ -21,7 +21,7 @@ class VirtualGraphSession implements TerminalSession {
   }
 
   enter(opts: { mouse: boolean; hover: boolean }): void {
-    this.mouseOpts = opts;
+    this.mouseOpts = { enabled: opts.mouse, hover: opts.hover };
   }
   leave(): void {}
   write(): void {}

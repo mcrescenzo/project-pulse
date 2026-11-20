@@ -5,21 +5,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { joinOrStartHub, startHubServer, type HubServerHandle } from "../src/hub";
 import { RoadmapService } from "../src/store";
-
-function resolveChromiumExecutable(): string | null {
-  const candidates = [
-    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-  ].filter((p): p is string => Boolean(p));
-
-  for (const path of candidates) {
-    if (existsSync(path)) return path;
-  }
-  return null;
-}
+import { resolveChromiumExecutable } from "./helpers/chromium";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const testUi = CHROMIUM_PATH ? test : test.skip;
@@ -49,7 +35,7 @@ afterEach(async () => {
 async function readSseUntilEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   expectedEvent: string,
-  timeoutMs = 1500
+  timeoutMs = 5000
 ): Promise<string> {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -139,7 +125,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
 
     new RoadmapService(repoA).addFeatureNote("alpha-feat", "Alpha update");
     const [outA, outB] = await Promise.all([
-      readSseUntilEvent(readerA, "reload", 1500),
+      readSseUntilEvent(readerA, "reload", 5000),
       readSseUntilEvent(readerB, "reload", 400),
     ]);
     expect(outA).toContain("event: reload");

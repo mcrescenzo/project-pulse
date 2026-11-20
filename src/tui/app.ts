@@ -82,7 +82,7 @@ export class TuiController {
     this.onExit = options.onExit;
 
     const loaded = this.service.load();
-    const fastCheck = this.service.check(loaded);
+    const fastCheck = this.service.check();
     const knownIds = new Set(loaded.milestones.map((m) => m.id));
     const defaultId = loaded.config.defaults.milestone;
     const milestones = [...loaded.milestones];
@@ -841,7 +841,7 @@ export class TuiController {
 
   private reloadSync(options: { preserveFeedback?: boolean } = {}): void {
     const loaded = this.service.load();
-    const fastCheck = this.service.check(loaded);
+    const fastCheck = this.service.check();
     const knownIds = new Set(loaded.milestones.map((m) => m.id));
     const defaultId = loaded.config.defaults.milestone;
     const milestones = [...loaded.milestones];
