@@ -406,7 +406,8 @@ function buildDashboardHtml(): string {
       overflow: hidden;
       border: 1px solid var(--border);
     }
-    .mini-fill { height: 100%; background: var(--accent); }
+    .mini-fill { display: block; height: 100%; background: var(--accent); }
+    .mini-fill.is-done { background: var(--green); }
     .ref-chip {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.73rem;
@@ -861,7 +862,7 @@ function buildDashboardHtml(): string {
                     '<div class="card-meta">' +
                       (f.area ? '<span class="area-badge">' + esc(f.area) + "</span>" : "") +
                       (total > 0
-                        ? "<span>" + done + "/" + total + ' criteria</span><span class="mini-track" aria-hidden="true"><span class="mini-fill" style="width:' + criteriaPct + '%"></span></span>'
+                        ? "<span>" + done + "/" + total + ' criteria</span><span class="mini-track" aria-hidden="true"><span class="mini-fill' + (criteriaPct === 100 ? " is-done" : "") + '" style="width:' + criteriaPct + '%"></span></span>'
                         : "<span>No criteria</span>") +
                     "</div>" +
                     depsHtml +

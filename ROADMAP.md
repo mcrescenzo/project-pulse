@@ -72,7 +72,7 @@ Localhost web viewer powered by Bun.serve with file-watch live reload.
 
 ## v0.2 — Hardening & UX Polish (`v0.2`)
 
-**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 3/3 features shipped
+**Status:** `shipped` | **Target:** 2027-Q1 | **Progress:** 3/3 features shipped
 
 Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhost CSRF protection, dashboard accessibility, and Playwright regression tests.
 
