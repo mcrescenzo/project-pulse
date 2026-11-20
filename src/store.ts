@@ -27,6 +27,8 @@ export const MILESTONES_DIR_NAME = "milestones";
 export const FEATURES_DIR_NAME = "features";
 export const ROADMAP_FILE_NAME = "ROADMAP.md";
 
+const VALID_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
 export interface LoadedStore {
   config: PulseConfig;
   milestones: Milestone[];
@@ -47,12 +49,125 @@ export interface InitResult {
   created: boolean;
 }
 
+export interface UpsertMilestoneInput {
+  id: string;
+  title: string;
+  order?: number;
+  status?: MilestoneStatus;
+  target?: string;
+  description?: string;
+}
+
+export interface UpdateMilestonePatch {
+  title?: string;
+  order?: number;
+  status?: MilestoneStatus;
+  target?: string;
+  description?: string;
+}
+
+export interface UpsertFeatureInput {
+  id: string;
+  title: string;
+  milestone?: string;
+  order?: number;
+  status?: FeatureStatus;
+  area?: string;
+  depends_on?: string[];
+  refs?: string[];
+  ship_criteria?: Array<string | ShipCriterion>;
+  description?: string;
+}
+
+export interface UpdateFeaturePatch {
+  title?: string;
+  milestone?: string;
+  order?: number;
+  status?: FeatureStatus;
+  area?: string;
+  depends_on?: string[];
+  addRefs?: string[];
+  removeRefs?: string[];
+  ship_criteria?: Array<string | ShipCriterion>;
+  description?: string;
+}
+
+export interface MutationResult<T> {
+  entity: T;
+  warnings: ValidationIssue[];
+  roadmapPath: string;
+}
+
+function assertValidId(id: string, kind: string): void {
+  if (!id || !VALID_ID_RE.test(id)) {
+    throw new Error(
+      `Invalid ${kind} id '${id}'. IDs must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/`
+    );
+  }
+}
+
+function slugifyCriterionId(text: string, usedIds: Set<string>, index: number): string {
+  const base = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .split("-")
+    .slice(0, 4)
+    .join("-")
+    .slice(0, 32);
+  let candidate = base || `c-${index + 1}`;
+  if (!usedIds.has(candidate)) {
+    usedIds.add(candidate);
+    return candidate;
+  }
+  let suffix = 2;
+  while (usedIds.has(`${candidate}-${suffix}`)) {
+    suffix++;
+  }
+  const unique = `${candidate}-${suffix}`;
+  usedIds.add(unique);
+  return unique;
+}
+
+function normalizeCriteriaInput(
+  items: Array<string | ShipCriterion> | undefined
+): ShipCriterion[] {
+  if (!items) return [];
+  const usedIds = new Set<string>();
+  const result: ShipCriterion[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    if (typeof item === "string") {
+      const id = slugifyCriterionId(item, usedIds, i);
+      result.push({ id, text: item.trim(), done: false });
+    } else {
+      const id = item.id?.trim() || slugifyCriterionId(item.text, usedIds, i);
+      usedIds.add(id);
+      result.push({ id, text: item.text.trim(), done: Boolean(item.done) });
+    }
+  }
+  return result;
+}
+
+function nextOrder(items: Array<{ order: number }>): number {
+  if (items.length === 0) return 10;
+  return Math.max(...items.map((i) => i.order)) + 10;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+}
+
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item));
 }
 
-function parseShipCriteria(value: unknown, featureId: string, parseIssues: ValidationIssue[]): ShipCriterion[] {
+function parseShipCriteria(
+  value: unknown,
+  featureId: string,
+  parseIssues: ValidationIssue[]
+): ShipCriterion[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     parseIssues.push({
@@ -85,7 +200,11 @@ function parseShipCriteria(value: unknown, featureId: string, parseIssues: Valid
   return result;
 }
 
-function parseUpdates(value: unknown, featureId: string, parseIssues: ValidationIssue[]): FeatureUpdate[] {
+function parseUpdates(
+  value: unknown,
+  featureId: string,
+  parseIssues: ValidationIssue[]
+): FeatureUpdate[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     parseIssues.push({
@@ -331,6 +450,289 @@ export class RoadmapService {
       features: sortFeatures(features),
       parseIssues,
     };
+  }
+
+  private validateCandidate(
+    config: PulseConfig,
+    milestones: Milestone[],
+    features: Feature[]
+  ): ValidationIssue[] {
+    const issues = validateStore({
+      config,
+      milestones,
+      features,
+      currentRoadmapMd: null,
+      expectedRoadmapMd: "",
+      checkRoadmapSync: false,
+    });
+    const errors = issues.filter((i) => i.level === "error");
+    if (errors.length > 0) {
+      throw new Error(errors.map((e) => e.message).join("; "));
+    }
+    return issues.filter((i) => i.level === "warning");
+  }
+
+  upsertMilestone(input: UpsertMilestoneInput): MutationResult<Milestone> {
+    assertValidId(input.id, "milestone");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+
+    const existing = loaded.milestones.find((m) => m.id === input.id);
+    const milestone: Milestone = {
+      id: input.id,
+      title: input.title,
+      order: input.order ?? existing?.order ?? nextOrder(loaded.milestones),
+      status: input.status ?? existing?.status ?? "planned",
+      target: input.target !== undefined ? input.target || undefined : existing?.target,
+      description: input.description !== undefined ? input.description : existing?.description ?? "",
+    };
+
+    const candidateMilestones = [
+      ...loaded.milestones.filter((m) => m.id !== milestone.id),
+      milestone,
+    ];
+    const warnings = this.validateCandidate(loaded.config, candidateMilestones, loaded.features);
+
+    this.writeMilestoneFile(milestone);
+    const { roadmapPath } = this.render();
+    return { entity: milestone, warnings, roadmapPath };
+  }
+
+  updateMilestone(id: string, patch: UpdateMilestonePatch): MutationResult<Milestone> {
+    assertValidId(id, "milestone");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.milestones.find((m) => m.id === id);
+    if (!existing) {
+      throw new Error(`Milestone '${id}' not found`);
+    }
+
+    const updated: Milestone = {
+      id: existing.id,
+      title: patch.title ?? existing.title,
+      order: patch.order ?? existing.order,
+      status: patch.status ?? existing.status,
+      target: patch.target !== undefined ? patch.target || undefined : existing.target,
+      description: patch.description ?? existing.description,
+    };
+
+    const candidateMilestones = [
+      ...loaded.milestones.filter((m) => m.id !== id),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, candidateMilestones, loaded.features);
+
+    this.writeMilestoneFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
+  }
+
+  addFeature(input: UpsertFeatureInput): MutationResult<Feature> {
+    assertValidId(input.id, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    if (loaded.features.some((f) => f.id === input.id)) {
+      throw new Error(`Feature '${input.id}' already exists; use 'pp feature update ${input.id}'`);
+    }
+
+    const targetMilestone = input.milestone ?? loaded.config.defaults.milestone;
+    const sameMilestoneFeatures = loaded.features.filter((f) => f.milestone === targetMilestone);
+
+    const feature: Feature = {
+      id: input.id,
+      title: input.title,
+      milestone: targetMilestone,
+      order: input.order ?? nextOrder(sameMilestoneFeatures),
+      status: input.status ?? "planned",
+      area: input.area?.trim() || undefined,
+      depends_on: dedupeStrings(input.depends_on ?? []),
+      refs: dedupeStrings(input.refs ?? []),
+      ship_criteria: normalizeCriteriaInput(input.ship_criteria),
+      updates: [],
+      description: input.description ?? "",
+    };
+
+    const candidateFeatures = [...loaded.features, feature];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(feature);
+    const { roadmapPath } = this.render();
+    return { entity: feature, warnings, roadmapPath };
+  }
+
+  upsertFeature(input: UpsertFeatureInput): MutationResult<Feature> {
+    assertValidId(input.id, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === input.id);
+    if (!existing) {
+      return this.addFeature(input);
+    }
+
+    const updated: Feature = {
+      id: existing.id,
+      title: input.title ?? existing.title,
+      milestone: input.milestone ?? existing.milestone,
+      order: input.order ?? existing.order,
+      status: input.status ?? existing.status,
+      area: input.area !== undefined ? input.area.trim() || undefined : existing.area,
+      depends_on:
+        input.depends_on !== undefined ? dedupeStrings(input.depends_on) : existing.depends_on,
+      refs: input.refs !== undefined ? dedupeStrings(input.refs) : existing.refs,
+      ship_criteria:
+        input.ship_criteria !== undefined
+          ? normalizeCriteriaInput(input.ship_criteria)
+          : existing.ship_criteria,
+      updates: existing.updates,
+      description: input.description !== undefined ? input.description : existing.description,
+    };
+
+    const candidateFeatures = [
+      ...loaded.features.filter((f) => f.id !== existing.id),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
+  }
+
+  updateFeature(id: string, patch: UpdateFeaturePatch): MutationResult<Feature> {
+    assertValidId(id, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === id);
+    if (!existing) {
+      throw new Error(`Feature '${id}' not found`);
+    }
+
+    let nextRefs = [...existing.refs];
+    if (patch.addRefs && patch.addRefs.length > 0) {
+      nextRefs = dedupeStrings([...nextRefs, ...patch.addRefs]);
+    }
+    if (patch.removeRefs && patch.removeRefs.length > 0) {
+      const toRemove = new Set(patch.removeRefs);
+      nextRefs = nextRefs.filter((r) => !toRemove.has(r));
+    }
+
+    const updated: Feature = {
+      id: existing.id,
+      title: patch.title ?? existing.title,
+      milestone: patch.milestone ?? existing.milestone,
+      order: patch.order ?? existing.order,
+      status: patch.status ?? existing.status,
+      area: patch.area !== undefined ? patch.area.trim() || undefined : existing.area,
+      depends_on:
+        patch.depends_on !== undefined ? dedupeStrings(patch.depends_on) : existing.depends_on,
+      refs: nextRefs,
+      ship_criteria:
+        patch.ship_criteria !== undefined
+          ? normalizeCriteriaInput(patch.ship_criteria)
+          : existing.ship_criteria,
+      updates: existing.updates,
+      description: patch.description ?? existing.description,
+    };
+
+    const candidateFeatures = [
+      ...loaded.features.filter((f) => f.id !== id),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
+  }
+
+  checkFeatureCriterion(
+    featureId: string,
+    criterionIdOrIndex: string,
+    done?: boolean
+  ): MutationResult<Feature> {
+    assertValidId(featureId, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === featureId);
+    if (!existing) {
+      throw new Error(`Feature '${featureId}' not found`);
+    }
+
+    let targetIndex = existing.ship_criteria.findIndex((c) => c.id === criterionIdOrIndex);
+    if (targetIndex === -1 && /^\d+$/.test(criterionIdOrIndex)) {
+      const oneBased = Number.parseInt(criterionIdOrIndex, 10);
+      if (oneBased >= 1 && oneBased <= existing.ship_criteria.length) {
+        targetIndex = oneBased - 1;
+      }
+    }
+    if (targetIndex === -1) {
+      throw new Error(
+        `Ship criterion '${criterionIdOrIndex}' not found on feature '${featureId}'`
+      );
+    }
+
+    const updatedCriteria = existing.ship_criteria.map((c, idx) =>
+      idx === targetIndex ? { ...c, done: done === undefined ? !c.done : done } : c
+    );
+    const updated: Feature = {
+      ...existing,
+      ship_criteria: updatedCriteria,
+    };
+
+    const candidateFeatures = [
+      ...loaded.features.filter((f) => f.id !== featureId),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
+  }
+
+  addFeatureNote(featureId: string, note: string, at?: string): MutationResult<Feature> {
+    assertValidId(featureId, "feature");
+    const trimmedNote = note.trim();
+    if (!trimmedNote) {
+      throw new Error("Pulse note message must be non-empty");
+    }
+
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === featureId);
+    if (!existing) {
+      throw new Error(`Feature '${featureId}' not found`);
+    }
+
+    const timestamp = at ?? new Date().toISOString();
+    const updated: Feature = {
+      ...existing,
+      updates: [...existing.updates, { at: timestamp, note: trimmedNote }],
+    };
+
+    const candidateFeatures = [
+      ...loaded.features.filter((f) => f.id !== featureId),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
   }
 
   render(): { roadmapPath: string; content: string } {

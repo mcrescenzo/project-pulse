@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { RoadmapService } from "./store";
+import type { FeatureStatus, MilestoneStatus } from "./types";
 
 interface ParsedArgs {
   positionals: string[];
@@ -7,7 +8,23 @@ interface ParsedArgs {
   booleans: Set<string>;
 }
 
-const VALUE_FLAGS = new Set(["name", "summary", "root"]);
+const VALUE_FLAGS = new Set([
+  "name",
+  "summary",
+  "root",
+  "title",
+  "order",
+  "status",
+  "target",
+  "description",
+  "milestone",
+  "area",
+  "depends-on",
+  "ref",
+  "add-ref",
+  "remove-ref",
+  "criterion",
+]);
 
 function parseArgv(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
@@ -60,11 +77,46 @@ function getFlag(parsed: ParsedArgs, key: string): string | undefined {
   return vals && vals.length > 0 ? vals[vals.length - 1] : undefined;
 }
 
+function getFlagAll(parsed: ParsedArgs, key: string): string[] {
+  return parsed.flags.get(key) ?? [];
+}
+
+function parseOptionalNumber(raw: string | undefined, flagName: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const num = Number(raw);
+  if (!Number.isFinite(num)) {
+    throw new Error(`Flag --${flagName} must be a finite number (got '${raw}')`);
+  }
+  return num;
+}
+
+function parseCsvFlag(parsed: ParsedArgs, key: string): string[] | undefined {
+  const vals = parsed.flags.get(key);
+  if (!vals) return undefined;
+  return vals
+    .flatMap((v) => v.split(","))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function printWarnings(warnings: Array<{ code: string; message: string }>, jsonMode: boolean): void {
+  if (jsonMode) return;
+  for (const warn of warnings) {
+    console.warn(`WARN [${warn.code}]: ${warn.message}`);
+  }
+}
+
 function printHelp(): void {
   console.log(`project-pulse (pp) v0.1.0 — Repo-native high-level product roadmap
 
 Usage:
   pp init [--name <name>] [--summary <text>] [--json]
+  pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
+  pp milestone update <id> [--title <title>] [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
+  pp feature add <id> --title <title> [--milestone <m>] [--area <a>] [--status <s>] [--order <n>] [--depends-on <ids>] [--ref <ref>...] [--criterion <text>...] [--description <md>] [--json]
+  pp feature update <id> [--title <title>] [--status <s>] [--milestone <m>] [--area <a>] [--order <n>] [--depends-on <ids>] [--add-ref <ref>...] [--remove-ref <ref>...] [--description <md>] [--json]
+  pp feature check <feature-id> <criterion-id-or-index> [--done | --undone] [--json]
+  pp feature note <feature-id> "<message>" [--json]
   pp render [--json]
   pp check [--json]
   pp --help | --version
@@ -97,7 +149,7 @@ export async function runCli(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const [cmd] = parsed.positionals;
+  const [cmd, subcmd, ...rest] = parsed.positionals;
   if (!cmd || parsed.booleans.has("help") || cmd === "help") {
     printHelp();
     return 0;
@@ -120,6 +172,151 @@ export async function runCli(argv: string[]): Promise<number> {
           );
         }
         return 0;
+      }
+
+      case "milestone": {
+        if (subcmd === "add") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp milestone add <id> --title <title> ...");
+          const title = getFlag(parsed, "title");
+          if (!title) throw new Error("Missing required flag --title");
+          const res = service.upsertMilestone({
+            id,
+            title,
+            order: parseOptionalNumber(getFlag(parsed, "order"), "order"),
+            status: getFlag(parsed, "status") as MilestoneStatus | undefined,
+            target: getFlag(parsed, "target"),
+            description: getFlag(parsed, "description"),
+          });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, milestone: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            console.log(`Saved milestone '${res.entity.id}' (${res.entity.status}) and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+        if (subcmd === "update") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp milestone update <id> [flags]");
+          const res = service.updateMilestone(id, {
+            title: getFlag(parsed, "title"),
+            order: parseOptionalNumber(getFlag(parsed, "order"), "order"),
+            status: getFlag(parsed, "status") as MilestoneStatus | undefined,
+            target: getFlag(parsed, "target"),
+            description: getFlag(parsed, "description"),
+          });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, milestone: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            console.log(`Updated milestone '${res.entity.id}' (${res.entity.status}) and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+        throw new Error(`Unknown milestone subcommand '${subcmd ?? ""}'. Expected: add, update`);
+      }
+
+      case "feature": {
+        if (subcmd === "add") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp feature add <id> --title <title> --milestone <m> ...");
+          const title = getFlag(parsed, "title");
+          if (!title) throw new Error("Missing required flag --title");
+          const criteria = getFlagAll(parsed, "criterion");
+          const res = service.addFeature({
+            id,
+            title,
+            milestone: getFlag(parsed, "milestone"),
+            area: getFlag(parsed, "area"),
+            status: getFlag(parsed, "status") as FeatureStatus | undefined,
+            order: parseOptionalNumber(getFlag(parsed, "order"), "order"),
+            depends_on: parseCsvFlag(parsed, "depends-on"),
+            refs: getFlagAll(parsed, "ref"),
+            ship_criteria: criteria.length > 0 ? criteria : undefined,
+            description: getFlag(parsed, "description"),
+          });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, feature: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            console.log(
+              `Added feature '${res.entity.id}' to milestone '${res.entity.milestone}' and updated ROADMAP.md`
+            );
+          }
+          return 0;
+        }
+
+        if (subcmd === "update") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp feature update <id> [flags]");
+          const addRefs = getFlagAll(parsed, "add-ref");
+          const removeRefs = getFlagAll(parsed, "remove-ref");
+          const criteria = getFlagAll(parsed, "criterion");
+          const res = service.updateFeature(id, {
+            title: getFlag(parsed, "title"),
+            status: getFlag(parsed, "status") as FeatureStatus | undefined,
+            milestone: getFlag(parsed, "milestone"),
+            area: getFlag(parsed, "area"),
+            order: parseOptionalNumber(getFlag(parsed, "order"), "order"),
+            depends_on: parseCsvFlag(parsed, "depends-on"),
+            addRefs: addRefs.length > 0 ? addRefs : undefined,
+            removeRefs: removeRefs.length > 0 ? removeRefs : undefined,
+            ship_criteria: criteria.length > 0 ? criteria : undefined,
+            description: getFlag(parsed, "description"),
+          });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, feature: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            console.log(`Updated feature '${res.entity.id}' (${res.entity.status}) and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+
+        if (subcmd === "check") {
+          const [featureId, criterionKey] = rest;
+          if (!featureId || !criterionKey) {
+            throw new Error("Usage: pp feature check <feature-id> <criterion-id-or-index> [--done | --undone]");
+          }
+          const doneFlag = parsed.booleans.has("done");
+          const undoneFlag = parsed.booleans.has("undone");
+          if (doneFlag && undoneFlag) {
+            throw new Error("Flags --done and --undone are mutually exclusive");
+          }
+          const desiredState = doneFlag ? true : undoneFlag ? false : undefined;
+          const res = service.checkFeatureCriterion(featureId, criterionKey, desiredState);
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, feature: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            const doneCount = res.entity.ship_criteria.filter((c) => c.done).length;
+            console.log(
+              `Updated ship criteria on '${res.entity.id}' (${doneCount}/${res.entity.ship_criteria.length} done) and updated ROADMAP.md`
+            );
+          }
+          return 0;
+        }
+
+        if (subcmd === "note") {
+          const featureId = rest[0];
+          const message = rest.slice(1).join(" ").trim();
+          if (!featureId || !message) {
+            throw new Error('Usage: pp feature note <feature-id> "<message>"');
+          }
+          const res = service.addFeatureNote(featureId, message);
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(JSON.stringify({ ok: true, feature: res.entity, warnings: res.warnings }, null, 2));
+          } else {
+            console.log(`Logged pulse note on '${res.entity.id}' and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+
+        throw new Error(
+          `Unknown feature subcommand '${subcmd ?? ""}'. Expected: add, update, check, note`
+        );
       }
 
       case "render": {
