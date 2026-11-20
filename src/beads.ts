@@ -82,10 +82,10 @@ export class CliBeadsClient implements BeadsClient {
     ids: string[],
     cwd: string
   ): Promise<Map<string, Omit<BeadStatusInfo, "ref">>> {
-    const idArgs = ids.map((id) => (id.startsWith("-") ? `--id=${id}` : id));
     let proc: ReturnType<typeof Bun.spawn>;
     try {
-      proc = Bun.spawn([this.bdBin, "--readonly", "show", ...idArgs, "--json"], {
+      // `--` ends option parsing so a ref like `bd:--foo` can never be interpreted as a bd flag.
+      proc = Bun.spawn([this.bdBin, "--readonly", "show", "--json", "--", ...ids], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",

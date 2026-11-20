@@ -6,6 +6,7 @@ import { chromium, type Browser } from "playwright-core";
 import { joinOrStartHub, startHubServer, type HubServerHandle } from "../src/hub";
 import { RoadmapService } from "../src/store";
 import { resolveChromiumExecutable } from "./helpers/chromium";
+import { authFetch } from "./helpers/auth";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const testUi = CHROMIUM_PATH ? test : test.skip;
@@ -73,11 +74,23 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const repoA2 = makeRepo(join("nested", "alpha-repo"), "Second Alpha", "alpha2-feat");
 
     hub = startHubServer({ port: 0, stateDir });
+    const api = authFetch(hub.accessToken);
 
-    // Token file created with restrictive 0600 permissions
+    // Token, access-token, and registry files created with restrictive permissions (state dir 0700)
     const hubLockPath = join(stateDir, "hub.json");
     expect(existsSync(hubLockPath)).toBe(true);
     expect(statSync(hubLockPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(stateDir, "access-token")).mode & 0o777).toBe(0o600);
+    expect(statSync(stateDir).mode & 0o777).toBe(0o700);
+
+    // Portfolio, project list, and project dashboards require the access token
+    expect((await fetch(`${hub.url}/`)).status).toBe(401);
+    expect((await fetch(`${hub.url}/api/hub/projects`)).status).toBe(401);
+    // Health probe stays public for hub discovery, but a foreign Host is rejected (DNS rebinding)
+    expect((await fetch(`${hub.url}/api/hub/health`)).status).toBe(200);
+    expect(
+      (await fetch(`${hub.url}/api/hub/health`, { headers: { Host: "attacker.example" } })).status
+    ).toBe(403);
 
     // Registration rejects missing or bad token
     const noToken = await fetch(`${hub.url}/api/hub/register`, {
@@ -98,6 +111,10 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const joinA = await joinOrStartHub(repoA, { port: hub.port, stateDir });
     expect(joinA.mode).toBe("joined");
     expect(joinA.slug).toBe("alpha-repo");
+    expect(joinA.url).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo`);
+    expect(joinA.openUrl).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo?t=${hub.accessToken}`);
+    expect((await fetch(`${hub.url}/p/alpha-repo/api/roadmap`)).status).toBe(401);
+    expect(statSync(join(stateDir, "projects.json")).mode & 0o777).toBe(0o600);
 
     const joinB = await joinOrStartHub(repoB, { port: hub.port, stateDir });
     expect(joinB.mode).toBe("joined");
@@ -112,14 +129,14 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(joinAAgain.slug).toBe("alpha-repo");
 
     // Per-project APIs return independent roadmaps
-    const roadA = await (await fetch(`${hub.url}/p/alpha-repo/api/roadmap`)).json();
-    const roadB = await (await fetch(`${hub.url}/p/beta-repo/api/roadmap`)).json();
+    const roadA = await (await api(`${hub.url}/p/alpha-repo/api/roadmap`)).json();
+    const roadB = await (await api(`${hub.url}/p/beta-repo/api/roadmap`)).json();
     expect(roadA.config.project.name).toBe("Alpha Project");
     expect(roadB.config.project.name).toBe("Beta Project");
 
     // Isolated SSE streams: mutating Alpha emits reload ONLY on Alpha's SSE stream, not Beta's
-    const sseA = await fetch(`${hub.url}/p/alpha-repo/api/events`);
-    const sseB = await fetch(`${hub.url}/p/beta-repo/api/events`);
+    const sseA = await api(`${hub.url}/p/alpha-repo/api/events`);
+    const sseB = await api(`${hub.url}/p/beta-repo/api/events`);
     const readerA = sseA.body!.getReader();
     const readerB = sseB.body!.getReader();
 
@@ -135,7 +152,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
 
     // Stale-path cleanup removes deleted repo from /api/hub/projects & projects.json
     rmSync(nestedDuplicateDir, { recursive: true, force: true });
-    const listAfterDelete = await (await fetch(`${hub.url}/api/hub/projects`)).json();
+    const listAfterDelete = await (await api(`${hub.url}/api/hub/projects`)).json();
     expect(listAfterDelete.projects.map((p: { slug: string }) => p.slug).sort()).toEqual([
       "alpha-repo",
       "beta-repo",
@@ -165,7 +182,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
       });
 
       // 1. Portfolio overview page lists both repositories
-      await page.goto(hub!.url, { waitUntil: "networkidle" });
+      await page.goto(hub!.openUrl, { waitUntil: "networkidle" });
       await page.waitForSelector('.project-card[data-project-slug="alpha-ui"]');
       await page.waitForSelector('.project-card[data-project-slug="beta-ui"]');
 
@@ -212,7 +229,9 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     ]);
     expect(joinErr).toBe("");
     expect(joinCode).toBe(0);
-    expect(joinOut).toContain(`Joined Project Pulse hub at http://127.0.0.1:${hub.port}/p/cli-hub-a`);
+    expect(joinOut).toContain(
+      `Joined Project Pulse hub at http://127.0.0.1:${hub.port}/p/cli-hub-a?t=${hub.accessToken}`
+    );
 
     // 2. CLI pp view --standalone starts isolated server cleanly even with --port
     const standaloneProc = Bun.spawn(
@@ -231,9 +250,11 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
       if (done || !value) break;
       out += decoder.decode(value, { stream: true });
     }
-    const urlMatch = out.match(/http:\/\/127\.0\.0\.1:\d+/);
+    const urlMatch = out.match(/(http:\/\/127\.0\.0\.1:\d+)\/\?t=([0-9a-f]{64})/);
     expect(urlMatch).not.toBeNull();
-    const apiData = await (await fetch(`${urlMatch![0]}/api/roadmap`)).json();
+    // Standalone mode uses the persistent access token from PROJECT_PULSE_HOME
+    expect(urlMatch![2]).toBe(readFileSync(join(stateDir, "access-token"), "utf8").trim());
+    const apiData = await (await authFetch(urlMatch![2]!)(`${urlMatch![1]}/api/roadmap`)).json();
     expect(apiData.config.project.name).toBe("CLI Standalone");
 
     await reader.cancel();

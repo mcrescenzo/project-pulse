@@ -60,7 +60,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
         if (res.status() >= 400) httpErrors.push(`${res.status()} ${res.url()}`);
       });
 
-      await page.goto(handle.url, { waitUntil: "networkidle" });
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
       await page.waitForSelector('.card[data-feature-id="ui-feature"]');
 
       // 1. Keyboard navigation: focus card -> Enter opens ARIA dialog drawer -> Escape closes & restores focus
@@ -189,7 +189,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
         if (m.type() === "error") consoleErrors.push(m.text());
       });
 
-      await page.goto(handle.url, { waitUntil: "networkidle" });
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
       await page.waitForSelector('.card[data-feature-id="node-a"]');
 
       // Filtering by "planned" hides milestones with no matching features

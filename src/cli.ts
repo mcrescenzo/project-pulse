@@ -4,7 +4,8 @@ import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { buildChangelog, buildDigest } from "./digest";
 import { exportStaticHtml } from "./export";
-import { joinOrStartHub } from "./hub";
+import { isSafeLocalUrl, loadOrCreateAccessToken } from "./http-security";
+import { joinOrStartHub, resolveHubStateDir } from "./hub";
 import { runMcpServer } from "./mcp";
 import { runRepoSetup } from "./setup";
 import {
@@ -75,7 +76,7 @@ const GLOBAL_VALUE_FLAGS = new Set(["root"]);
 const GLOBAL_BOOLEAN_FLAGS = new Set(["help", "version", "json"]);
 
 const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[] }> = {
-  init: { value: ["name", "summary"], boolean: ["agents-snippet"] },
+  init: { value: ["name", "summary"], boolean: ["agents-snippet", "force"] },
   summary: { value: ["milestone", "status"], boolean: [] },
   show: { value: [], boolean: ["beads", "no-beads"] },
   "milestone add": { value: ["title", "order", "status", "target", "description"], boolean: [] },
@@ -246,7 +247,7 @@ function printHelp(): void {
 
 Usage:
   pp                                  Run summary if initialized, otherwise show help
-  pp init [--name <name>] [--summary <text>] [--agents-snippet] [--json]
+  pp init [--name <name>] [--summary <text>] [--agents-snippet] [--force] [--json]
   pp summary [--milestone <id>] [--status <s>] [--json]
   pp show <feature-id> [--beads | --no-beads] [--json]
   pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
@@ -374,6 +375,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         const result = service.init({
           name: getFlag(parsed, "name"),
           summary: getFlag(parsed, "summary"),
+          force: parsed.booleans.has("force"),
         });
         const includeSnippet = parsed.booleans.has("agents-snippet");
         if (jsonMode) {
@@ -729,9 +731,10 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         const noOpen = parsed.booleans.has("no-open");
 
         if (parsed.booleans.has("standalone")) {
-          const handle = startViewServer(rootDir, { port, beadsClient });
-          console.log(`Project Pulse dashboard listening at ${handle.url}`);
-          if (!noOpen) openBrowser(handle.url);
+          const accessToken = loadOrCreateAccessToken(resolveHubStateDir());
+          const handle = startViewServer(rootDir, { port, beadsClient, accessToken });
+          console.log(`Project Pulse dashboard listening at ${handle.openUrl}`);
+          if (!noOpen) openBrowser(handle.openUrl);
           await waitForShutdown(() => handle.stop());
           return 0;
         }
@@ -739,16 +742,16 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         const hubResult = await joinOrStartHub(rootDir, { port, beadsClient });
         if (hubResult.mode === "joined") {
           console.log(
-            `Joined Project Pulse hub at ${hubResult.url} (overview: http://127.0.0.1:${hubResult.port}/)`
+            `Joined Project Pulse hub at ${hubResult.openUrl} (overview: http://127.0.0.1:${hubResult.port}/)`
           );
-          if (!noOpen) openBrowser(hubResult.url);
+          if (!noOpen) openBrowser(hubResult.openUrl);
           return 0;
         }
 
         console.log(
-          `Project Pulse hub listening at ${hubResult.handle.url} (project: ${hubResult.url})`
+          `Project Pulse hub listening at ${hubResult.handle.url} (project: ${hubResult.openUrl})`
         );
-        if (!noOpen) openBrowser(hubResult.url);
+        if (!noOpen) openBrowser(hubResult.openUrl);
         await waitForShutdown(() => hubResult.handle.stop());
         return 0;
       }
@@ -874,11 +877,13 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
 }
 
 function openBrowser(targetUrl: string): void {
+  // Only ever hand plain-http loopback URLs to the OS opener (never file:, flags, or remote hosts).
+  if (!isSafeLocalUrl(targetUrl)) return;
   const opener =
     process.platform === "darwin"
       ? ["open", targetUrl]
       : process.platform === "win32"
-      ? ["cmd", "/c", "start", targetUrl]
+      ? ["rundll32", "url.dll,FileProtocolHandler", targetUrl]
       : ["xdg-open", targetUrl];
   try {
     Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });

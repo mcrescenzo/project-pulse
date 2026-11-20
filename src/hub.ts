@@ -1,11 +1,24 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import pkg from "../package.json";
 import type { BeadsClient } from "./beads";
 import { buildDashboardHtml, buildPortfolioHtml, FAVICON_SVG } from "./dashboard-html";
-import { writeFileAtomic } from "./frontmatter";
+import {
+  buildOpenUrl,
+  ensurePrivateDir,
+  forbiddenHostResponse,
+  handleTokenLanding,
+  isAccessAuthorized,
+  isAllowedHost,
+  loadOrCreateAccessToken,
+  redactPaths,
+  tokensEqual,
+  unauthorizedResponse,
+  withSecurityHeaders,
+  writePrivateFile,
+} from "./http-security";
 import { CONFIG_FILE_NAME, PULSE_DIR_NAME, RoadmapService } from "./store";
 import { createProjectSlot, validateMutationRequest, type ProjectSlot } from "./view";
 
@@ -26,6 +39,8 @@ export interface HubLockFile {
   pid: number;
   port: number;
   token: string;
+  /** Browser access token for the dashboard (exchanged for a session cookie via `?t=`). */
+  accessToken?: string;
   startedAt: string;
 }
 
@@ -59,6 +74,8 @@ export interface HubServerOptions {
   beadsClient?: BeadsClient;
   stateDir?: string;
   token?: string;
+  /** Browser/API access token. Defaults to the persistent token in `<stateDir>/access-token`. */
+  accessToken?: string;
 }
 
 export interface HubServerHandle {
@@ -67,6 +84,9 @@ export interface HubServerHandle {
   url: string;
   stateDir: string;
   token: string;
+  accessToken: string;
+  /** Portfolio URL carrying `?t=<accessToken>` for first-visit cookie exchange. */
+  openUrl: string;
   registerProject: (rootDir: string) => RegisteredProjectRecord;
   removeProject: (slug: string) => boolean;
   listProjects: () => HubProjectSummary[];
@@ -86,6 +106,7 @@ export type JoinOrStartHubResult =
       slug: string;
       port: number;
       url: string;
+      openUrl: string;
       handle: HubServerHandle;
     }
   | {
@@ -93,6 +114,7 @@ export type JoinOrStartHubResult =
       slug: string;
       port: number;
       url: string;
+      openUrl: string;
     };
 
 export function resolveHubStateDir(stateDir?: string): string {
@@ -113,6 +135,8 @@ function canonicalRoot(rootDir: string): string {
 function isRepoInitialized(rootDir: string): boolean {
   return existsSync(join(rootDir, PULSE_DIR_NAME, CONFIG_FILE_NAME));
 }
+
+const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 function slugifyRepoName(rootDir: string, projectName?: string): string {
   const base = basename(rootDir) || projectName || "project";
@@ -140,6 +164,8 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
   const requestedPort = options.port ?? 4310;
   const stateDir = resolveHubStateDir(options.stateDir);
   const token = options.token ?? randomBytes(32).toString("hex");
+  ensurePrivateDir(stateDir);
+  const accessToken = options.accessToken ?? loadOrCreateAccessToken(stateDir);
   const hubJsonPath = join(stateDir, "hub.json");
   const projectsJsonPath = join(stateDir, "projects.json");
 
@@ -151,7 +177,7 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
       version: 1,
       projects: [...recordsBySlug.values()],
     };
-    writeFileAtomic(projectsJsonPath, `${JSON.stringify(file, null, 2)}\n`);
+    writePrivateFile(projectsJsonPath, `${JSON.stringify(file, null, 2)}\n`);
   };
 
   const pruneStaleProjects = (): boolean => {
@@ -317,60 +343,109 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
   const isTokenAuthorized = (req: Request): boolean | null => {
     const provided = req.headers.get("x-pp-hub-token");
     if (provided === null) return null;
-    return provided === token;
+    return tokensEqual(provided, token);
   };
 
-  const server = Bun.serve({
-    hostname,
-    port: requestedPort,
-    idleTimeout: 255,
-    async fetch(req) {
-      const url = new URL(req.url);
+  const route = async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
 
-      if (req.method === "GET" && url.pathname === "/") {
-        return new Response(portfolioHtml, {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
+    // DNS-rebinding defense: every route (reads included) must be addressed to a loopback host name.
+    if (!isAllowedHost(req, boundPort, hostname)) {
+      return forbiddenHostResponse();
+    }
+
+    if (req.method === "GET" && url.pathname === "/favicon.ico") {
+      return new Response(FAVICON_SVG, {
+        headers: {
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+
+    // Unauthenticated liveness probe used by `pp view` to discover/join a running hub (no paths or data).
+    if (req.method === "GET" && url.pathname === "/api/hub/health") {
+      pruneStaleProjects();
+      return Response.json({
+        ok: true,
+        service: "project-pulse-hub",
+        version: pkg.version,
+        pid: process.pid,
+        projectCount: slotsBySlug.size,
+      });
+    }
+
+    // CLI-to-hub registration authenticates with the hub token from 0600 hub.json instead of the cookie.
+    const isRegister = req.method === "POST" && url.pathname === "/api/hub/register";
+    if (!isRegister) {
+      const landing = handleTokenLanding(req, url, accessToken, boundPort);
+      if (landing) return landing;
+      if (!isAccessAuthorized(req, accessToken, boundPort) && isTokenAuthorized(req) !== true) {
+        return unauthorizedResponse(url.pathname.includes("/api/") ? "json" : "html");
       }
+    }
 
-      if (req.method === "GET" && url.pathname === "/favicon.ico") {
-        return new Response(FAVICON_SVG, {
-          headers: {
-            "Content-Type": "image/svg+xml; charset=utf-8",
-            "Cache-Control": "public, max-age=86400",
-          },
-        });
+    if (req.method === "GET" && url.pathname === "/") {
+      return new Response(portfolioHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/hub/projects") {
+      return Response.json({ projects: listProjects() });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hub/register") {
+      const tokenCheck = isTokenAuthorized(req);
+      if (tokenCheck === null) {
+        return Response.json(
+          { ok: false, error: "Missing X-PP-Hub-Token header" },
+          { status: 401 }
+        );
       }
-
-      if (req.method === "GET" && url.pathname === "/api/hub/health") {
-        pruneStaleProjects();
+      if (!tokenCheck) {
+        return Response.json(
+          { ok: false, error: "Invalid X-PP-Hub-Token header" },
+          { status: 403 }
+        );
+      }
+      const securityFailure = validateMutationRequest(req, boundPort, hostname);
+      if (securityFailure) {
+        return Response.json(
+          { ok: false, error: securityFailure.error },
+          { status: securityFailure.status }
+        );
+      }
+      try {
+        const body = (await req.json()) as { rootDir?: string };
+        if (!body?.rootDir || typeof body.rootDir !== "string") {
+          return Response.json(
+            { ok: false, error: "Missing string 'rootDir' in body" },
+            { status: 400 }
+          );
+        }
+        const rec = registerProject(body.rootDir);
         return Response.json({
           ok: true,
-          service: "project-pulse-hub",
-          version: pkg.version,
-          pid: process.pid,
-          projectCount: slotsBySlug.size,
+          slug: rec.slug,
+          path: `/p/${encodeURIComponent(rec.slug)}`,
+          url: `http://${hostname}:${boundPort}/p/${encodeURIComponent(rec.slug)}`,
         });
+      } catch (error) {
+        return Response.json(
+          { ok: false, error: redactPaths((error as Error).message) },
+          { status: 400 }
+        );
       }
+    }
 
-      if (req.method === "GET" && url.pathname === "/api/hub/projects") {
-        return Response.json({ projects: listProjects() });
+    const removeMatch = url.pathname.match(/^\/api\/hub\/projects\/([^/]+)\/remove$/);
+    if (req.method === "POST" && removeMatch) {
+      const tokenCheck = isTokenAuthorized(req);
+      if (tokenCheck === false) {
+        return Response.json({ ok: false, error: "Invalid X-PP-Hub-Token" }, { status: 403 });
       }
-
-      if (req.method === "POST" && url.pathname === "/api/hub/register") {
-        const tokenCheck = isTokenAuthorized(req);
-        if (tokenCheck === null) {
-          return Response.json(
-            { ok: false, error: "Missing X-PP-Hub-Token header" },
-            { status: 401 }
-          );
-        }
-        if (!tokenCheck) {
-          return Response.json(
-            { ok: false, error: "Invalid X-PP-Hub-Token header" },
-            { status: 403 }
-          );
-        }
+      if (tokenCheck === null) {
         const securityFailure = validateMutationRequest(req, boundPort, hostname);
         if (securityFailure) {
           return Response.json(
@@ -378,102 +453,76 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
             { status: securityFailure.status }
           );
         }
-        try {
-          const body = (await req.json()) as { rootDir?: string };
-          if (!body?.rootDir || typeof body.rootDir !== "string") {
-            return Response.json(
-              { ok: false, error: "Missing string 'rootDir' in body" },
-              { status: 400 }
-            );
-          }
-          const rec = registerProject(body.rootDir);
-          return Response.json({
-            ok: true,
-            slug: rec.slug,
-            path: `/p/${encodeURIComponent(rec.slug)}`,
-            url: `http://${hostname}:${boundPort}/p/${encodeURIComponent(rec.slug)}`,
-          });
-        } catch (error) {
-          return Response.json({ ok: false, error: (error as Error).message }, { status: 400 });
-        }
+      }
+      let slug: string;
+      try {
+        slug = decodeURIComponent(removeMatch[1]!);
+      } catch {
+        return Response.json({ ok: false, error: "Invalid slug encoding" }, { status: 400 });
+      }
+      const removed = removeProject(slug);
+      if (!removed) {
+        return Response.json({ ok: false, error: `Project '${slug}' not found` }, { status: 404 });
+      }
+      return Response.json({ ok: true, slug });
+    }
+
+    const projectMatch = url.pathname.match(/^\/p\/([^/]+)(\/.*)?$/);
+    if (projectMatch) {
+      let slug: string;
+      try {
+        slug = decodeURIComponent(projectMatch[1]!);
+      } catch {
+        return new Response("Bad Request", { status: 400 });
+      }
+      const subpath = projectMatch[2] ?? "/";
+      const rec = recordsBySlug.get(slug);
+      const slot = slotsBySlug.get(slug);
+      if (!rec || !slot) {
+        return new Response("Project not found in hub", { status: 404 });
+      }
+      if (!isRepoInitialized(rec.rootDir)) {
+        pruneStaleProjects();
+        return new Response("Project directory no longer exists", { status: 404 });
       }
 
-      const removeMatch = url.pathname.match(/^\/api\/hub\/projects\/([^/]+)\/remove$/);
-      if (req.method === "POST" && removeMatch) {
-        const tokenCheck = isTokenAuthorized(req);
-        if (tokenCheck === false) {
-          return Response.json({ ok: false, error: "Invalid X-PP-Hub-Token" }, { status: 403 });
-        }
-        if (tokenCheck === null) {
-          const securityFailure = validateMutationRequest(req, boundPort, hostname);
-          if (securityFailure) {
-            return Response.json(
-              { ok: false, error: securityFailure.error },
-              { status: securityFailure.status }
-            );
-          }
-        }
-        let slug: string;
-        try {
-          slug = decodeURIComponent(removeMatch[1]!);
-        } catch {
-          return Response.json({ ok: false, error: "Invalid slug encoding" }, { status: 400 });
-        }
-        const removed = removeProject(slug);
-        if (!removed) {
-          return Response.json({ ok: false, error: `Project '${slug}' not found` }, { status: 404 });
-        }
-        return Response.json({ ok: true, slug });
+      if (req.method === "GET" && (subpath === "" || subpath === "/")) {
+        const html = buildDashboardHtml({
+          mode: "live",
+          apiBasePath: `/p/${encodeURIComponent(slug)}`,
+          projectSwitcher: {
+            currentSlug: slug,
+            portfolioUrl: "/",
+          },
+        });
+        return new Response(html, {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
       }
 
-      const projectMatch = url.pathname.match(/^\/p\/([^/]+)(\/.*)?$/);
-      if (projectMatch) {
-        let slug: string;
-        try {
-          slug = decodeURIComponent(projectMatch[1]!);
-        } catch {
-          return new Response("Bad Request", { status: 400 });
-        }
-        const subpath = projectMatch[2] ?? "/";
-        const rec = recordsBySlug.get(slug);
-        const slot = slotsBySlug.get(slug);
-        if (!rec || !slot) {
-          return new Response("Project not found in hub", { status: 404 });
-        }
-        if (!isRepoInitialized(rec.rootDir)) {
-          pruneStaleProjects();
-          return new Response("Project directory no longer exists", { status: 404 });
-        }
-
-        if (req.method === "GET" && (subpath === "" || subpath === "/")) {
-          const html = buildDashboardHtml({
-            mode: "live",
-            apiBasePath: `/p/${encodeURIComponent(slug)}`,
-            projectSwitcher: {
-              currentSlug: slug,
-              portfolioUrl: "/",
-            },
-          });
-          return new Response(html, {
-            headers: { "Content-Type": "text/html; charset=utf-8" },
-          });
-        }
-
-        if (req.method === "GET" && subpath === "/api/roadmap") {
-          return slot.handleRoadmap();
-        }
-
-        if (req.method === "GET" && subpath === "/api/events") {
-          return slot.handleEvents();
-        }
-
-        const pulseMatch = subpath.match(/^\/api\/features\/([^/]+)\/pulse$/);
-        if (req.method === "POST" && pulseMatch) {
-          return slot.handlePulse(req, pulseMatch[1]!, boundPort, hostname);
-        }
+      if (req.method === "GET" && subpath === "/api/roadmap") {
+        return slot.handleRoadmap();
       }
 
-      return new Response("Not Found", { status: 404 });
+      if (req.method === "GET" && subpath === "/api/events") {
+        return slot.handleEvents();
+      }
+
+      const pulseMatch = subpath.match(/^\/api\/features\/([^/]+)\/pulse$/);
+      if (req.method === "POST" && pulseMatch) {
+        return slot.handlePulse(req, pulseMatch[1]!, boundPort, hostname);
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
+  };
+
+  const server = Bun.serve({
+    hostname,
+    port: requestedPort,
+    idleTimeout: 255,
+    async fetch(req) {
+      return withSecurityHeaders(await route(req));
     },
   });
 
@@ -482,14 +531,10 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     pid: process.pid,
     port: boundPort,
     token,
+    accessToken,
     startedAt: new Date().toISOString(),
   };
-  writeFileAtomic(hubJsonPath, `${JSON.stringify(hubLock, null, 2)}\n`);
-  try {
-    chmodSync(hubJsonPath, 0o600);
-  } catch {
-    // Best-effort permission lock on platforms without POSIX modes
-  }
+  writePrivateFile(hubJsonPath, `${JSON.stringify(hubLock, null, 2)}\n`);
 
   const hubUrl = `http://${hostname}:${boundPort}`;
 
@@ -517,6 +562,8 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     url: hubUrl,
     stateDir,
     token,
+    accessToken,
+    openUrl: buildOpenUrl(hubUrl, "/", accessToken),
     registerProject,
     removeProject,
     listProjects,
@@ -563,7 +610,8 @@ export async function joinOrStartHub(
     }
 
     const lockFile = readJsonFile<HubLockFile>(join(stateDir, "hub.json"));
-    if (!lockFile?.token) {
+    // Only hand our hub token to the process that actually wrote hub.json (guards against port squatters).
+    if (!lockFile?.token || lockFile.pid !== payload.pid || lockFile.port !== port) {
       throw new Error(
         `Detected a running Project Pulse hub on ${hubBase}, but found no matching hub token in ${join(
           stateDir,
@@ -586,17 +634,22 @@ export async function joinOrStartHub(
       url?: string;
       error?: string;
     };
-    if (!regRes.ok || !regJson.slug || !regJson.url) {
+    if (!regRes.ok || !regJson.slug || !SAFE_SLUG_RE.test(regJson.slug)) {
       throw new Error(
         `Failed to register with running hub at ${hubBase}: ${regJson.error ?? `HTTP ${regRes.status}`}`
       );
     }
 
+    // Build the URL locally from a validated slug rather than trusting a URL returned over the network.
+    const projectPath = `/p/${encodeURIComponent(regJson.slug)}`;
     return {
       mode: "joined",
       slug: regJson.slug,
       port,
-      url: regJson.url,
+      url: `${hubBase}${projectPath}`,
+      openUrl: lockFile.accessToken
+        ? buildOpenUrl(hubBase, projectPath, lockFile.accessToken)
+        : `${hubBase}${projectPath}`,
     };
   }
 
@@ -615,11 +668,13 @@ export async function joinOrStartHub(
   }
 
   const record = handle.registerProject(service.rootDir);
+  const projectPath = `/p/${encodeURIComponent(record.slug)}`;
   return {
     mode: "started",
     slug: record.slug,
     port: handle.port,
-    url: `${handle.url}/p/${encodeURIComponent(record.slug)}`,
+    url: `${handle.url}${projectPath}`,
+    openUrl: buildOpenUrl(handle.url, projectPath, handle.accessToken),
     handle,
   };
 }

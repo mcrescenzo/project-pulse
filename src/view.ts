@@ -1,6 +1,18 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { buildDashboardHtml, FAVICON_SVG, type RoadmapViewPayload } from "./dashboard-html";
+import {
+  buildAllowedHosts,
+  buildOpenUrl,
+  forbiddenHostResponse,
+  generateAccessToken,
+  handleTokenLanding,
+  isAccessAuthorized,
+  isAllowedHost,
+  redactPaths,
+  unauthorizedResponse,
+  withSecurityHeaders,
+} from "./http-security";
 import { RoadmapService } from "./store";
 import type { BeadStatusInfo, FeatureStatus } from "./types";
 
@@ -8,12 +20,18 @@ export interface ViewServerOptions {
   port?: number;
   hostname?: string;
   beadsClient?: BeadsClient;
+  /** Access token required by the dashboard and API. Defaults to a fresh random token per server. */
+  accessToken?: string;
 }
 
 export interface ViewServerHandle {
   server: ReturnType<typeof Bun.serve>;
   port: number;
+  /** Base URL (no token); requests to it require the access cookie or X-PP-Access-Token header. */
   url: string;
+  /** URL to open in a browser: carries `?t=<token>` and is exchanged for an HttpOnly session cookie. */
+  openUrl: string;
+  accessToken: string;
   stop: () => void;
 }
 
@@ -33,21 +51,7 @@ export interface ProjectSlot {
   close: () => void;
 }
 
-export function buildAllowedHosts(boundPort: number, hostname: string): Set<string> {
-  const hosts = new Set<string>([
-    `127.0.0.1:${boundPort}`,
-    `localhost:${boundPort}`,
-    `[::1]:${boundPort}`,
-    `${hostname.toLowerCase()}:${boundPort}`,
-  ]);
-  if (boundPort === 80) {
-    hosts.add("127.0.0.1");
-    hosts.add("localhost");
-    hosts.add("[::1]");
-    hosts.add(hostname.toLowerCase());
-  }
-  return hosts;
-}
+export { buildAllowedHosts };
 
 /**
  * Validates localhost Origin/Host/Sec-Fetch-Site/Content-Type headers on state-mutating endpoints.
@@ -210,7 +214,7 @@ export function createProjectSlot(
       return Response.json(await getPayload());
     } catch (error) {
       return Response.json(
-        { ok: false, error: (error as Error).message },
+        { ok: false, error: redactPaths((error as Error).message) },
         { status: 500 }
       );
     }
@@ -297,7 +301,7 @@ export function createProjectSlot(
     } catch (error) {
       const message = (error as Error).message;
       const status = message.includes("not found") ? 404 : 400;
-      return Response.json({ ok: false, error: message }, { status });
+      return Response.json({ ok: false, error: redactPaths(message) }, { status });
     }
   };
 
@@ -348,43 +352,60 @@ export function startViewServer(
   let boundPort = requestedPort;
 
   const dashboardHtml = buildDashboardHtml({ mode: "live" });
+  const accessToken = options.accessToken ?? generateAccessToken();
+
+  const route = async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
+
+    // DNS-rebinding defense: every route (reads included) must be addressed to a loopback host name.
+    if (!isAllowedHost(req, boundPort, hostname)) {
+      return forbiddenHostResponse();
+    }
+
+    if (req.method === "GET" && url.pathname === "/favicon.ico") {
+      return new Response(FAVICON_SVG, {
+        headers: {
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+
+    const landing = handleTokenLanding(req, url, accessToken, boundPort);
+    if (landing) return landing;
+
+    if (!isAccessAuthorized(req, accessToken, boundPort)) {
+      return unauthorizedResponse(url.pathname.startsWith("/api/") ? "json" : "html");
+    }
+
+    if (req.method === "GET" && url.pathname === "/") {
+      return new Response(dashboardHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/roadmap") {
+      return slot.handleRoadmap();
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/events") {
+      return slot.handleEvents();
+    }
+
+    const pulseMatch = url.pathname.match(/^\/api\/features\/([^/]+)\/pulse$/);
+    if (req.method === "POST" && pulseMatch) {
+      return slot.handlePulse(req, pulseMatch[1]!, boundPort, hostname);
+    }
+
+    return new Response("Not Found", { status: 404 });
+  };
 
   const server = Bun.serve({
     hostname,
     port: requestedPort,
     idleTimeout: 255,
     async fetch(req) {
-      const url = new URL(req.url);
-
-      if (req.method === "GET" && url.pathname === "/") {
-        return new Response(dashboardHtml, {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
-      }
-
-      if (req.method === "GET" && url.pathname === "/favicon.ico") {
-        return new Response(FAVICON_SVG, {
-          headers: {
-            "Content-Type": "image/svg+xml; charset=utf-8",
-            "Cache-Control": "public, max-age=86400",
-          },
-        });
-      }
-
-      if (req.method === "GET" && url.pathname === "/api/roadmap") {
-        return slot.handleRoadmap();
-      }
-
-      if (req.method === "GET" && url.pathname === "/api/events") {
-        return slot.handleEvents();
-      }
-
-      const pulseMatch = url.pathname.match(/^\/api\/features\/([^/]+)\/pulse$/);
-      if (req.method === "POST" && pulseMatch) {
-        return slot.handlePulse(req, pulseMatch[1]!, boundPort, hostname);
-      }
-
-      return new Response("Not Found", { status: 404 });
+      return withSecurityHeaders(await route(req));
     },
   });
 
@@ -400,6 +421,8 @@ export function startViewServer(
     server,
     port: boundPort,
     url: viewUrl,
+    openUrl: buildOpenUrl(viewUrl, "/", accessToken),
+    accessToken,
     stop,
   };
 }

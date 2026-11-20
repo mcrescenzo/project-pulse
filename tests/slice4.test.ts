@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { BeadsClient } from "../src/beads";
 import { RoadmapService } from "../src/store";
 import { startViewServer, type ViewServerHandle } from "../src/view";
+import { authFetch } from "./helpers/auth";
 
 let tempDir: string;
 let handle: ViewServerHandle | null = null;
@@ -74,7 +75,9 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
 
     handle = startViewServer(tempDir, { port: 0, beadsClient });
 
-    const htmlRes = await fetch(handle.url);
+    const api = authFetch(handle.accessToken);
+
+    const htmlRes = await api(handle.url);
     expect(htmlRes.status).toBe(200);
     expect(htmlRes.headers.get("content-type")).toContain("text/html");
     const html = await htmlRes.text();
@@ -82,7 +85,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(html).toContain("/api/roadmap");
     expect(html).toContain("/api/events");
 
-    const apiRes = await fetch(`${handle.url}/api/roadmap`);
+    const apiRes = await api(`${handle.url}/api/roadmap`);
     expect(apiRes.status).toBe(200);
     const data = (await apiRes.json()) as {
       config: { project: { name: string } };
@@ -110,12 +113,14 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
 
     handle = startViewServer(tempDir, { port: 0 });
 
-    const sseRes = await fetch(`${handle.url}/api/events`);
+    const api = authFetch(handle.accessToken);
+
+    const sseRes = await api(`${handle.url}/api/events`);
     expect(sseRes.status).toBe(200);
     const reader = sseRes.body!.getReader();
 
     // Quick-action 1: POST /api/features/:id/pulse updates status, criterion checkbox, and note
-    const pulseRes = await fetch(`${handle.url}/api/features/quick-edit/pulse`, {
+    const pulseRes = await api(`${handle.url}/api/features/quick-edit/pulse`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -162,15 +167,17 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     svc.addFeature({ id: "safe-feat", title: "Safe Feature", milestone: "v0.1", status: "planned" });
 
     handle = startViewServer(tempDir, { port: 0 });
+
+    const api = authFetch(handle.accessToken);
     const endpoint = `${handle.url}/api/features/safe-feat/pulse`;
 
     // Favicon returns 200 SVG without 404
-    const faviconRes = await fetch(`${handle.url}/favicon.ico`);
+    const faviconRes = await api(`${handle.url}/favicon.ico`);
     expect(faviconRes.status).toBe(200);
     expect(faviconRes.headers.get("content-type")).toContain("image/svg+xml");
 
     // Non-JSON Content-Type -> 415
-    const textRes = await fetch(endpoint, {
+    const textRes = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -178,7 +185,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(textRes.status).toBe(415);
 
     // Cross-origin -> 403
-    const crossOrigin = await fetch(endpoint, {
+    const crossOrigin = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -186,7 +193,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(crossOrigin.status).toBe(403);
 
     // Null Origin -> 403
-    const nullOrigin = await fetch(endpoint, {
+    const nullOrigin = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "null" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -194,7 +201,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(nullOrigin.status).toBe(403);
 
     // Cross-site Sec-Fetch-Site -> 403
-    const crossSite = await fetch(endpoint, {
+    const crossSite = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "cross-site" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -202,7 +209,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(crossSite.status).toBe(403);
 
     // Spoofed Host -> 403
-    const badHost = await fetch(endpoint, {
+    const badHost = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Host: "evil.example:4310" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -210,7 +217,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(badHost.status).toBe(403);
 
     // Same-origin localhost mutation succeeds
-    const validRes = await fetch(endpoint, {
+    const validRes = await api(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -222,11 +229,62 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect(validRes.status).toBe(200);
 
     // Unknown feature returns 404
-    const notFoundRes = await fetch(`${handle.url}/api/features/does-not-exist/pulse`, {
+    const notFoundRes = await api(`${handle.url}/api/features/does-not-exist/pulse`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "shipped" }),
     });
     expect(notFoundRes.status).toBe(404);
+  });
+
+  test("requires access token, rejects foreign Host on reads, exchanges ?t= for a cookie, and sets anti-framing headers", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Auth Demo" });
+    handle = startViewServer(tempDir, { port: 0, accessToken: "a".repeat(64) });
+    const base = handle.url;
+
+    // Unauthenticated reads are rejected (HTML and JSON)
+    const noAuthHtml = await fetch(base);
+    expect(noAuthHtml.status).toBe(401);
+    expect(noAuthHtml.headers.get("content-type")).toContain("text/html");
+    expect((await fetch(`${base}/api/roadmap`)).status).toBe(401);
+    expect((await fetch(`${base}/api/events`)).status).toBe(401);
+
+    // Wrong token header and wrong landing token are rejected
+    expect(
+      (await fetch(`${base}/api/roadmap`, { headers: { "X-PP-Access-Token": "b".repeat(64) } })).status
+    ).toBe(401);
+    expect((await fetch(`${base}/?t=${"b".repeat(64)}`, { redirect: "manual" })).status).toBe(401);
+
+    // DNS-rebinding: a foreign Host is rejected even with valid credentials, on GET routes too
+    const rebound = await fetch(`${base}/api/roadmap`, {
+      headers: { Host: "attacker.example", "X-PP-Access-Token": handle.accessToken },
+    });
+    expect(rebound.status).toBe(403);
+
+    // Landing URL sets an HttpOnly SameSite=Strict cookie and redirects to the clean URL
+    expect(handle.openUrl).toBe(`${base}/?t=${handle.accessToken}`);
+    const landing = await fetch(handle.openUrl, { redirect: "manual" });
+    expect(landing.status).toBe(302);
+    expect(landing.headers.get("location")).toBe("/");
+    const setCookie = landing.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain(`pp_access_${handle.port}=${handle.accessToken}`);
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=Strict");
+
+    // Cookie authenticates subsequent requests
+    const cookie = `pp_access_${handle.port}=${handle.accessToken}`;
+    const withCookie = await fetch(`${base}/api/roadmap`, { headers: { Cookie: cookie } });
+    expect(withCookie.status).toBe(200);
+    expect(((await withCookie.json()) as { config: { project: { name: string } } }).config.project.name).toBe(
+      "Auth Demo"
+    );
+
+    // Anti-framing / hardening headers on every response, including errors
+    for (const res of [withCookie, noAuthHtml, rebound]) {
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+      expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    }
   });
 });

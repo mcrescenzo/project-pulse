@@ -411,6 +411,14 @@ export function createMcpHandler(
 /**
  * Runs the newline-delimited JSON-RPC 2.0 MCP server over stdio until stdin closes.
  */
+/** True when a parsed JSON-RPC message is an object with a string `method` and a valid optional id. */
+export function isJsonRpcRequestShape(value: unknown): value is JsonRpcRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const msg = value as { method?: unknown; id?: unknown };
+  if (typeof msg.method !== "string") return false;
+  return msg.id === undefined || msg.id === null || typeof msg.id === "string" || typeof msg.id === "number";
+}
+
 export async function runMcpServer(
   rootDir: string,
   beadsClient: BeadsClient = new CliBeadsClient()
@@ -439,7 +447,27 @@ export async function runMcpServer(
       return;
     }
 
-    const response = await handle(parsed);
+    if (!isJsonRpcRequestShape(parsed)) {
+      const rawId = (parsed as { id?: unknown } | null)?.id;
+      const errorResp: JsonRpcResponse = {
+        jsonrpc: "2.0",
+        id: typeof rawId === "string" || typeof rawId === "number" ? rawId : null,
+        error: { code: -32600, message: "Invalid Request: expected a JSON-RPC object with a string 'method'" },
+      };
+      process.stdout.write(`${JSON.stringify(errorResp)}\n`);
+      return;
+    }
+
+    let response: JsonRpcResponse | null;
+    try {
+      response = await handle(parsed);
+    } catch (error) {
+      response = {
+        jsonrpc: "2.0",
+        id: parsed.id ?? null,
+        error: { code: -32603, message: `Internal error: ${(error as Error).message}` },
+      };
+    }
     if (response !== null) {
       process.stdout.write(`${JSON.stringify(response)}\n`);
     }

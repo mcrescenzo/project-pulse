@@ -186,7 +186,7 @@ describe("Slice 2: Orientation Commands & Read-Only Beads Drift Resolver", () =>
     writeFileSync(
       stubScript,
       `#!/usr/bin/env bash
-if [[ "$3" == "pp-9" ]]; then
+if [[ "$5" == "pp-9" ]]; then
   echo '[{"id":"pp-9","status":"closed","title":"Completed bead"}]'
   exit 0
 fi
@@ -233,7 +233,7 @@ OUT="["
 FIRST=1
 FOUND_ANY=0
 for arg in "$@"; do
-  if [[ "$arg" == "--readonly" || "$arg" == "show" || "$arg" == "--json" ]]; then
+  if [[ "$arg" == "--readonly" || "$arg" == "show" || "$arg" == "--json" || "$arg" == "--" ]]; then
     continue
   fi
   ID="\${arg#--id=}"

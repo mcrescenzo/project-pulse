@@ -148,6 +148,12 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       </div>`
     : "";
 
+  // Offline snapshots are opened from disk: lock them down to inline code/styles with no network access.
+  const staticCspMeta =
+    mode === "static"
+      ? `\n  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />`
+      : "";
+
   const liveBadgeInitial =
     mode === "static"
       ? `<span class="pill pill-snapshot" id="live-badge">Offline Snapshot</span>`
@@ -157,7 +163,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />${staticCspMeta}
   <title>Project Pulse — Roadmap</title>
   <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URL}" />
   ${EARLY_THEME_SCRIPT}

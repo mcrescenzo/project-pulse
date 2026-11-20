@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Feature, Milestone, PulseConfig } from "./types";
 
@@ -129,17 +129,38 @@ export function serializeFeature(feature: Feature): string {
 
 /**
  * Atomically writes a file by staging a sibling temporary file and renaming it into place.
+ *
+ * - If `filePath` is a symlink, the link's target is rewritten and the link itself is preserved.
+ * - An existing file's permission bits are carried over (so 0600 configs stay private).
+ * - New files use `options.mode` when given (default: process umask, typically 0644).
  */
-export function writeFileAtomic(filePath: string, content: string): void {
-  const dir = dirname(filePath);
+export function writeFileAtomic(
+  filePath: string,
+  content: string,
+  options: { mode?: number } = {}
+): void {
+  let targetPath = filePath;
+  let mode = options.mode;
+  try {
+    if (lstatSync(filePath).isSymbolicLink()) {
+      targetPath = realpathSync(filePath);
+    }
+    if (mode === undefined) {
+      mode = statSync(targetPath).mode & 0o777;
+    }
+  } catch {
+    // Target does not exist yet (or is a dangling link): write a fresh file at filePath
+  }
+
+  const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
   const tmpPath = join(
     dir,
     `.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
   );
   try {
-    writeFileSync(tmpPath, content, "utf8");
-    renameSync(tmpPath, filePath);
+    writeFileSync(tmpPath, content, mode === undefined ? "utf8" : { encoding: "utf8", mode });
+    renameSync(tmpPath, targetPath);
   } catch (error) {
     try {
       unlinkSync(tmpPath);

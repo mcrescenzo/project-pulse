@@ -327,7 +327,10 @@ export function buildDigest(
     if (!isGitRepo) {
       throw new Error(`Cannot resolve git ref '${since.ref}': ${service.rootDir} is not a git repository`);
     }
-    const rev = runGit(["rev-parse", "--verify", `${since.ref}^{commit}`], service.rootDir);
+    const rev = runGit(
+      ["rev-parse", "--verify", "--end-of-options", `${since.ref}^{commit}`],
+      service.rootDir
+    );
     if (!rev.ok || !rev.stdout.trim()) {
       throw new Error(`Could not resolve git ref '${since.ref}'`);
     }
