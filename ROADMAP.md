@@ -119,7 +119,7 @@ Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
-**Status:** `active` | **Progress:** 2/5 features shipped
+**Status:** `active` | **Progress:** 3/5 features shipped
 
 Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
 
@@ -173,7 +173,7 @@ Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server 
 
 ### Self-Contained Static HTML Export (`static-html-export`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.3`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.3`
 
 Generates a single self-contained offline HTML roadmap snapshot from .project-pulse/ for sharing without a local server.
 

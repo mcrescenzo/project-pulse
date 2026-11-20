@@ -3,7 +3,7 @@ id: static-html-export
 title: Self-Contained Static HTML Export
 milestone: v0.3
 order: 50
-status: in-progress
+status: shipped
 area: UI
 depends_on:
   - dashboard-polish-security
