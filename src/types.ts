@@ -88,4 +88,51 @@ export interface CheckResult {
   ok: boolean;
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
+  beads?: Record<string, BeadStatusInfo[]>;
+}
+
+export interface SummaryFeatureItem {
+  id: string;
+  title: string;
+  milestone: string;
+  status: FeatureStatus;
+  area?: string;
+  criteriaDone: number;
+  criteriaTotal: number;
+  depends_on: string[];
+  refs: string[];
+  latestUpdate?: FeatureUpdate;
+}
+
+export interface SummaryMilestoneItem {
+  id: string;
+  title: string;
+  status: MilestoneStatus | "backlog";
+  target?: string;
+  totalFeatures: number;
+  shippedFeatures: number;
+  features: SummaryFeatureItem[];
+}
+
+export interface SummaryResult {
+  project: {
+    name: string;
+    summary: string;
+  };
+  totals: {
+    milestones: number;
+    features: number;
+    shipped: number;
+    inProgress: number;
+    planned: number;
+    paused: number;
+    cut: number;
+  };
+  milestones: SummaryMilestoneItem[];
+}
+
+export interface ShowFeatureResult {
+  feature: Feature;
+  milestone?: Milestone;
+  beads: BeadStatusInfo[];
 }

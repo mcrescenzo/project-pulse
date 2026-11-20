@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { RoadmapService } from "./store";
+import { CliBeadsClient, type BeadsClient } from "./beads";
+import { formatFeatureText, formatSummaryText, RoadmapService } from "./store";
 import type { FeatureStatus, MilestoneStatus } from "./types";
 
 interface ParsedArgs {
@@ -111,6 +112,8 @@ function printHelp(): void {
 
 Usage:
   pp init [--name <name>] [--summary <text>] [--json]
+  pp summary [--milestone <id>] [--status <s>] [--json]
+  pp show <feature-id> [--beads] [--json]
   pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
   pp milestone update <id> [--title <title>] [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
   pp feature add <id> --title <title> [--milestone <m>] [--area <a>] [--status <s>] [--order <n>] [--depends-on <ids>] [--ref <ref>...] [--criterion <text>...] [--description <md>] [--json]
@@ -118,7 +121,7 @@ Usage:
   pp feature check <feature-id> <criterion-id-or-index> [--done | --undone] [--json]
   pp feature note <feature-id> "<message>" [--json]
   pp render [--json]
-  pp check [--json]
+  pp check [--beads] [--json]
   pp --help | --version
 
 Options:
@@ -128,7 +131,11 @@ Options:
   -v, --version  Show version`);
 }
 
-export async function runCli(argv: string[]): Promise<number> {
+export interface CliDependencies {
+  beadsClient?: BeadsClient;
+}
+
+export async function runCli(argv: string[], deps: CliDependencies = {}): Promise<number> {
   let parsed: ParsedArgs;
   try {
     parsed = parseArgv(argv);
@@ -156,6 +163,7 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   const service = new RoadmapService(rootDir);
+  const beadsClient = deps.beadsClient ?? new CliBeadsClient();
 
   try {
     switch (cmd) {
@@ -170,6 +178,36 @@ export async function runCli(argv: string[]): Promise<number> {
           console.log(
             `${result.created ? "Initialized" : "Updated"} .project-pulse/ for "${result.config.project.name}" and generated ROADMAP.md`
           );
+        }
+        return 0;
+      }
+
+      case "summary": {
+        const summary = service.summary({
+          milestone: getFlag(parsed, "milestone"),
+          status: getFlag(parsed, "status"),
+        });
+        if (jsonMode) {
+          console.log(JSON.stringify(summary, null, 2));
+        } else {
+          console.log(formatSummaryText(summary));
+        }
+        return 0;
+      }
+
+      case "show": {
+        const featureId = subcmd;
+        if (!featureId) {
+          throw new Error("Usage: pp show <feature-id> [--beads] [--json]");
+        }
+        const detail = await service.showFeature(featureId, {
+          beads: parsed.booleans.has("beads") ? true : undefined,
+          beadsClient,
+        });
+        if (jsonMode) {
+          console.log(JSON.stringify(detail, null, 2));
+        } else {
+          console.log(formatFeatureText(detail));
         }
         return 0;
       }
@@ -330,7 +368,10 @@ export async function runCli(argv: string[]): Promise<number> {
       }
 
       case "check": {
-        const result = service.check();
+        const result = await service.checkWithBeads({
+          beads: parsed.booleans.has("beads"),
+          beadsClient,
+        });
         if (jsonMode) {
           console.log(JSON.stringify(result, null, 2));
         } else {

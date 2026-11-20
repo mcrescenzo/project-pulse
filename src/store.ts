@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { CliBeadsClient, evaluateBeadsDrift, extractBeadRefs, type BeadsClient } from "./beads";
 import {
   parseMarkdownFile,
   serializeConfig,
@@ -9,6 +10,7 @@ import {
 } from "./frontmatter";
 import { renderRoadmapMarkdown, sortFeatures, sortMilestones } from "./renderer";
 import type {
+  BeadStatusInfo,
   CheckResult,
   Feature,
   FeatureStatus,
@@ -17,6 +19,10 @@ import type {
   MilestoneStatus,
   PulseConfig,
   ShipCriterion,
+  ShowFeatureResult,
+  SummaryFeatureItem,
+  SummaryMilestoneItem,
+  SummaryResult,
   ValidationIssue,
 } from "./types";
 import { validateStore } from "./validator";
@@ -779,6 +785,144 @@ export class RoadmapService {
     };
   }
 
+  async checkWithBeads(options: {
+    beads?: boolean;
+    beadsClient?: BeadsClient;
+  } = {}): Promise<CheckResult> {
+    const base = this.check();
+    if (!options.beads) {
+      return base;
+    }
+
+    const loaded = this.load();
+    const beadsClient = options.beadsClient ?? new CliBeadsClient();
+    const resolvedMap: Record<string, BeadStatusInfo[]> = {};
+
+    for (const feature of loaded.features) {
+      if (extractBeadRefs(feature.refs).length > 0) {
+        resolvedMap[feature.id] = await beadsClient.resolveRefs(feature.refs, this.rootDir);
+      }
+    }
+
+    const driftIssues = evaluateBeadsDrift(loaded.features, resolvedMap);
+    const errors = [...base.errors, ...driftIssues.filter((i) => i.level === "error")];
+    const warnings = [...base.warnings, ...driftIssues.filter((i) => i.level === "warning")];
+
+    return {
+      ok: errors.length === 0,
+      errors,
+      warnings,
+      beads: resolvedMap,
+    };
+  }
+
+  summary(options: { milestone?: string; status?: string } = {}): SummaryResult {
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+
+    const filterMilestone = options.milestone;
+    const filterStatus = options.status;
+
+    const toSummaryFeature = (f: Feature): SummaryFeatureItem => ({
+      id: f.id,
+      title: f.title,
+      milestone: f.milestone,
+      status: f.status,
+      area: f.area,
+      criteriaDone: f.ship_criteria.filter((c) => c.done).length,
+      criteriaTotal: f.ship_criteria.length,
+      depends_on: [...f.depends_on],
+      refs: [...f.refs],
+      latestUpdate: f.updates.length > 0 ? f.updates[f.updates.length - 1] : undefined,
+    });
+
+    const filteredFeatures = loaded.features.filter((f) => {
+      if (filterMilestone && f.milestone !== filterMilestone) return false;
+      if (filterStatus && f.status !== filterStatus) return false;
+      return true;
+    });
+
+    const milestoneGroups: SummaryMilestoneItem[] = [];
+    const knownMilestoneIds = new Set(loaded.milestones.map((m) => m.id));
+
+    for (const milestone of loaded.milestones) {
+      if (filterMilestone && milestone.id !== filterMilestone) continue;
+      const allForMilestone = loaded.features.filter((f) => f.milestone === milestone.id);
+      const visibleForMilestone = filteredFeatures.filter((f) => f.milestone === milestone.id);
+      if (filterStatus && visibleForMilestone.length === 0) continue;
+
+      milestoneGroups.push({
+        id: milestone.id,
+        title: milestone.title,
+        status: milestone.status,
+        target: milestone.target,
+        totalFeatures: allForMilestone.length,
+        shippedFeatures: allForMilestone.filter((f) => f.status === "shipped").length,
+        features: visibleForMilestone.map(toSummaryFeature),
+      });
+    }
+
+    const defaultId = loaded.config.defaults.milestone;
+    if (!knownMilestoneIds.has(defaultId) && (!filterMilestone || filterMilestone === defaultId)) {
+      const backlogAll = loaded.features.filter((f) => f.milestone === defaultId);
+      const backlogVisible = filteredFeatures.filter((f) => f.milestone === defaultId);
+      if (backlogVisible.length > 0) {
+        milestoneGroups.push({
+          id: defaultId,
+          title: "Backlog",
+          status: "backlog",
+          totalFeatures: backlogAll.length,
+          shippedFeatures: backlogAll.filter((f) => f.status === "shipped").length,
+          features: backlogVisible.map(toSummaryFeature),
+        });
+      }
+    }
+
+    return {
+      project: {
+        name: loaded.config.project.name,
+        summary: loaded.config.project.summary,
+      },
+      totals: {
+        milestones: milestoneGroups.length,
+        features: filteredFeatures.length,
+        shipped: filteredFeatures.filter((f) => f.status === "shipped").length,
+        inProgress: filteredFeatures.filter((f) => f.status === "in-progress").length,
+        planned: filteredFeatures.filter((f) => f.status === "planned").length,
+        paused: filteredFeatures.filter((f) => f.status === "paused").length,
+        cut: filteredFeatures.filter((f) => f.status === "cut").length,
+      },
+      milestones: milestoneGroups,
+    };
+  }
+
+  async showFeature(
+    featureId: string,
+    options: { beads?: boolean; beadsClient?: BeadsClient } = {}
+  ): Promise<ShowFeatureResult> {
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const feature = loaded.features.find((f) => f.id === featureId);
+    if (!feature) {
+      throw new Error(`Feature '${featureId}' not found`);
+    }
+    const milestone = loaded.milestones.find((m) => m.id === feature.milestone);
+
+    const resolveBeads =
+      options.beads ?? (loaded.config.integrations.beads.enabled && extractBeadRefs(feature.refs).length > 0);
+    let beads: BeadStatusInfo[] = [];
+    if (resolveBeads && extractBeadRefs(feature.refs).length > 0) {
+      const client = options.beadsClient ?? new CliBeadsClient();
+      beads = await client.resolveRefs(feature.refs, this.rootDir);
+    }
+
+    return { feature, milestone, beads };
+  }
+
   writeMilestoneFile(milestone: Milestone): void {
     const path = join(this.milestonesDir, `${milestone.id}.md`);
     writeFileAtomic(path, serializeMilestone(milestone));
@@ -788,4 +932,96 @@ export class RoadmapService {
     const path = join(this.featuresDir, `${feature.id}.md`);
     writeFileAtomic(path, serializeFeature(feature));
   }
+}
+
+function truncateText(text: string, maxLen: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, maxLen - 3)}...`;
+}
+
+/**
+ * Formats a compact, token-lean roadmap summary suitable for agent startup and quick developer review.
+ */
+export function formatSummaryText(summary: SummaryResult): string {
+  const lines: string[] = [
+    `# ${summary.project.name} (${summary.totals.shipped}/${summary.totals.features} shipped, ${summary.totals.inProgress} in-progress, ${summary.totals.planned} planned)`,
+  ];
+
+  if (summary.milestones.length === 0) {
+    lines.push("No matching milestones or features.");
+    return lines.join("\n");
+  }
+
+  for (const milestone of summary.milestones) {
+    const targetSuffix = milestone.target ? ` | ${milestone.target}` : "";
+    lines.push(
+      `\n## ${milestone.title} (${milestone.id}) [${milestone.status}${targetSuffix}] — ${milestone.shippedFeatures}/${milestone.totalFeatures} shipped`
+    );
+    if (milestone.features.length === 0) {
+      lines.push("- (no features)");
+      continue;
+    }
+    for (const f of milestone.features) {
+      const parts: string[] = [`[${f.status}]`];
+      if (f.area) parts.push(f.area);
+      if (f.criteriaTotal > 0) parts.push(`${f.criteriaDone}/${f.criteriaTotal} criteria`);
+      if (f.depends_on.length > 0) parts.push(`deps:${f.depends_on.join(",")}`);
+      if (f.latestUpdate) parts.push(`"${truncateText(f.latestUpdate.note, 48)}"`);
+      lines.push(`- ${f.id}: ${f.title} — ${parts.join(" | ")}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Formats full details for a single feature including criteria, dependencies, Beads refs, and pulse log.
+ */
+export function formatFeatureText(detail: ShowFeatureResult): string {
+  const { feature, milestone, beads } = detail;
+  const lines: string[] = [
+    `${feature.title} (${feature.id})`,
+    `Milestone: ${milestone ? `${milestone.title} (${milestone.id})` : feature.milestone}`,
+    `Status: ${feature.status}${feature.area ? ` | Area: ${feature.area}` : ""} | Order: ${feature.order}`,
+  ];
+
+  if (feature.depends_on.length > 0) {
+    lines.push(`Depends on: ${feature.depends_on.join(", ")}`);
+  }
+  if (feature.refs.length > 0) {
+    lines.push(`Refs: ${feature.refs.join(", ")}`);
+  }
+  if (feature.description.trim()) {
+    lines.push("", feature.description.trim());
+  }
+
+  if (feature.ship_criteria.length > 0) {
+    lines.push("", "Ship Criteria:");
+    feature.ship_criteria.forEach((c, idx) => {
+      lines.push(`  ${idx + 1}. [${c.done ? "x" : " "}] ${c.text} (${c.id})`);
+    });
+  }
+
+  if (beads.length > 0) {
+    lines.push("", "Beads Linked Issues:");
+    for (const b of beads) {
+      if (!b.available) {
+        lines.push(`  - ${b.ref}: unavailable (${b.error ?? "bd unreachable"})`);
+      } else if (!b.found) {
+        lines.push(`  - ${b.ref}: NOT FOUND`);
+      } else {
+        lines.push(`  - ${b.ref}: [${b.status ?? "unknown"}] ${b.title ?? ""}`.trimEnd());
+      }
+    }
+  }
+
+  if (feature.updates.length > 0) {
+    lines.push("", "Pulse Updates:");
+    for (const u of feature.updates) {
+      lines.push(`  - ${u.at}: ${u.note}`);
+    }
+  }
+
+  return lines.join("\n");
 }
