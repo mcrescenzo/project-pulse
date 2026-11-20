@@ -3,6 +3,7 @@ import { CliBeadsClient, type BeadsClient } from "./beads";
 import { runMcpServer } from "./mcp";
 import { formatFeatureText, formatSummaryText, getAgentsSnippet, RoadmapService } from "./store";
 import type { FeatureStatus, MilestoneStatus } from "./types";
+import { startViewServer } from "./view";
 
 interface ParsedArgs {
   positionals: string[];
@@ -26,6 +27,7 @@ const VALUE_FLAGS = new Set([
   "add-ref",
   "remove-ref",
   "criterion",
+  "port",
 ]);
 
 function parseArgv(argv: string[]): ParsedArgs {
@@ -123,6 +125,7 @@ Usage:
   pp feature note <feature-id> "<message>" [--json]
   pp render [--json]
   pp check [--beads] [--json]
+  pp view [--port <n>] [--no-open]
   pp mcp
   pp --help | --version
 
@@ -406,6 +409,38 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
 
       case "mcp": {
         await runMcpServer(rootDir, beadsClient);
+        return 0;
+      }
+
+      case "view": {
+        const port = parseOptionalNumber(getFlag(parsed, "port"), "port") ?? 4310;
+        const handle = startViewServer(rootDir, { port, beadsClient });
+        console.log(`Project Pulse dashboard listening at ${handle.url}`);
+
+        if (!parsed.booleans.has("no-open")) {
+          const opener =
+            process.platform === "darwin"
+              ? ["open", handle.url]
+              : process.platform === "win32"
+              ? ["cmd", "/c", "start", handle.url]
+              : ["xdg-open", handle.url];
+          try {
+            Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
+          } catch {
+            // Best-effort browser open; ignore in headless environments
+          }
+        }
+
+        await new Promise<void>((resolveStop) => {
+          const shutdown = () => {
+            process.off("SIGINT", shutdown);
+            process.off("SIGTERM", shutdown);
+            handle.stop();
+            resolveStop();
+          };
+          process.on("SIGINT", shutdown);
+          process.on("SIGTERM", shutdown);
+        });
         return 0;
       }
 
