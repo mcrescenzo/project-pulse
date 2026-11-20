@@ -92,14 +92,16 @@ Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria 
 
 ### Batched & Cached Beads Resolution (`beads-resolution-perf`)
 
-**Status:** `planned` | **Area:** Integrations | **Depends on:** `orientation-and-beads` | **Refs:** `bd:pp-01q.2`
+**Status:** `in-progress` | **Area:** Integrations | **Depends on:** `orientation-and-beads` | **Refs:** `bd:pp-01q.2`
 
 Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invocation caching across CLI and dashboard endpoints.
 
-**Ship Criteria (0/3):**
-- [ ] Resolves multiple unique Beads refs via batched lookup with per-invocation cache
-- [ ] Speeds up pp check --beads, pp show, and /api/roadmap without stale cross-run cache state
-- [ ] Covers multi-ref caching and partial missing-id behavior in unit tests
+**Ship Criteria (3/3):**
+- [x] Resolves multiple unique Beads refs via batched lookup with per-invocation cache
+- [x] Speeds up pp check --beads, pp show, and /api/roadmap without stale cross-run cache state
+- [x] Covers multi-ref caching and partial missing-id behavior in unit tests
+
+> **Latest Pulse (2026-11-20T14:07:15.686Z):** Replaced serial bd show calls with batched chunked resolution and single-pass store loading across checkWithBeads and /api/roadmap.
 
 ### Dashboard Security, Accessibility & Visual Polish (`dashboard-polish-security`)
 

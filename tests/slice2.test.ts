@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliBeadsClient, type BeadsClient } from "../src/beads";
@@ -206,5 +206,98 @@ exit 1
     const checkStub = await svc.checkWithBeads({ beads: true, beadsClient: stubClient });
     expect(checkStub.ok).toBe(false);
     expect(checkStub.errors.some((e) => e.code === "BEADS_REF_NOT_FOUND")).toBe(true);
+  });
+
+  test("CliBeadsClient batches multi-feature lookups into one invocation without stale cross-run cache", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Batching Demo" });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "active" });
+
+    svc.addFeature({ id: "f1", title: "F1", milestone: "v0.1", status: "shipped", refs: ["bd:pp-1", "bd:pp-shared"] });
+    svc.addFeature({ id: "f2", title: "F2", milestone: "v0.1", status: "in-progress", refs: ["bd:pp-2", "bd:pp-shared"] });
+    svc.addFeature({ id: "f3", title: "F3", milestone: "v0.1", status: "planned", refs: ["bd:pp-3"] });
+    svc.addFeature({ id: "f4", title: "F4", milestone: "v0.1", status: "planned", refs: ["bd:pp-4"] });
+    svc.addFeature({ id: "f5", title: "F5", milestone: "v0.1", status: "planned", refs: ["bd:pp-missing"] });
+
+    const countFile = join(tempDir, "bd-invocations.txt");
+    const stateFile = join(tempDir, "bd-state.txt");
+    writeFileSync(stateFile, "open", "utf8");
+
+    const batchStub = join(tempDir, "fake-batch-bd.sh");
+    writeFileSync(
+      batchStub,
+      `#!/usr/bin/env bash
+echo "$*" >> "${countFile}"
+STATE=$(cat "${stateFile}")
+OUT="["
+FIRST=1
+FOUND_ANY=0
+for arg in "$@"; do
+  if [[ "$arg" == "--readonly" || "$arg" == "show" || "$arg" == "--json" ]]; then
+    continue
+  fi
+  ID="\${arg#--id=}"
+  if [[ "$ID" == "pp-1" || "$ID" == "pp-shared" ]]; then
+    S="closed"
+  elif [[ "$ID" == "pp-2" || "$ID" == "pp-3" || "$ID" == "pp-4" ]]; then
+    S="$STATE"
+  else
+    continue
+  fi
+  FOUND_ANY=1
+  if [[ "$FIRST" -eq 0 ]]; then OUT="$OUT,"; fi
+  OUT="$OUT{\\"id\\":\\"$ID\\",\\"status\\":\\"$S\\",\\"title\\":\\"Issue $ID\\"}"
+  FIRST=0
+done
+OUT="$OUT]"
+if [[ "$FOUND_ANY" -eq 0 ]]; then
+  echo '{"error":"no issues found matching the provided IDs"}'
+  exit 1
+fi
+echo "$OUT"
+exit 0
+`,
+      "utf8"
+    );
+    chmodSync(batchStub, 0o755);
+
+    const client = new CliBeadsClient({ bdBin: batchStub, batchSize: 50 });
+
+    // First check across 5 features (6 unique refs, 2 duplicates) must invoke bd exactly once
+    const check1 = await svc.checkWithBeads({ beads: true, beadsClient: client });
+    const invocations1 = readFileSync(countFile, "utf8").trim().split("\n");
+    expect(invocations1).toHaveLength(1);
+    expect(check1.beads?.["f1"]?.map((b) => b.status)).toEqual(["closed", "closed"]);
+    expect(check1.beads?.["f2"]?.[0]?.status).toBe("open");
+    expect(check1.beads?.["f5"]?.[0]).toMatchObject({ id: "pp-missing", available: true, found: false });
+    expect(check1.errors.some((e) => e.entityId === "f5" && e.code === "BEADS_REF_NOT_FOUND")).toBe(true);
+
+    // Updating stub state and calling resolveRefs/checkWithBeads again must NOT return stale cached statuses
+    writeFileSync(stateFile, "in_progress", "utf8");
+    const check2 = await svc.checkWithBeads({ beads: true, beadsClient: client });
+    expect(check2.beads?.["f2"]?.[0]?.status).toBe("in_progress");
+
+    // Batch with only missing IDs exits 1 -> marks all unavailable-miss as found: false, available: true
+    const allMissing = await client.resolveRefs(["bd:pp-missing-1", "bd:pp-missing-2"], tempDir);
+    expect(allMissing).toEqual([
+      { ref: "bd:pp-missing-1", id: "pp-missing-1", available: true, found: false, error: "Beads issue 'pp-missing-1' not found" },
+      { ref: "bd:pp-missing-2", id: "pp-missing-2", available: true, found: false, error: "Beads issue 'pp-missing-2' not found" },
+    ]);
+
+    // Chunking respects batchSize when unique IDs exceed batchSize
+    const smallChunkClient = new CliBeadsClient({ bdBin: batchStub, batchSize: 2 });
+    const beforeLines = readFileSync(countFile, "utf8").trim().split("\n").length;
+    const chunked = await smallChunkClient.resolveRefs(
+      ["bd:pp-1", "bd:pp-2", "bd:pp-3", "bd:pp-1"],
+      tempDir
+    );
+    const afterLines = readFileSync(countFile, "utf8").trim().split("\n").length;
+    expect(afterLines - beforeLines).toBe(2);
+    expect(chunked.map((c) => `${c.id}:${c.status}`)).toEqual([
+      "pp-1:closed",
+      "pp-2:in_progress",
+      "pp-3:in_progress",
+      "pp-1:closed",
+    ]);
   });
 });

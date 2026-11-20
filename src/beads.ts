@@ -7,6 +7,7 @@ export interface BeadsClient {
 export interface CliBeadsClientOptions {
   bdBin?: string;
   timeoutMs?: number;
+  batchSize?: number;
 }
 
 /**
@@ -26,52 +27,76 @@ export function extractBeadRefs(refs: string[]): Array<{ ref: string; id: string
 }
 
 /**
- * Read-only Beads (`bd`) resolver invoking `bd --readonly show <id> --json`.
+ * Read-only Beads (`bd`) resolver invoking batched `bd --readonly show <ids...> --json`.
  * Degrades cleanly if `bd` is absent, times out, or no `.beads` database is present.
  */
 export class CliBeadsClient implements BeadsClient {
   private readonly bdBin: string;
   private readonly timeoutMs: number;
+  private readonly batchSize: number;
 
   constructor(options: CliBeadsClientOptions = {}) {
     this.bdBin = options.bdBin ?? "bd";
     this.timeoutMs = options.timeoutMs ?? 5000;
+    this.batchSize = Math.max(1, options.batchSize ?? 50);
   }
 
   async resolveRefs(refs: string[], cwd: string): Promise<BeadStatusInfo[]> {
     const bdRefs = extractBeadRefs(refs);
     if (bdRefs.length === 0) return [];
 
-    const cache = new Map<string, Omit<BeadStatusInfo, "ref">>();
-    const results: BeadStatusInfo[] = [];
+    const uniqueIds = [...new Set(bdRefs.map((r) => r.id))];
+    const resolvedById = new Map<string, Omit<BeadStatusInfo, "ref">>();
 
-    for (const { ref, id } of bdRefs) {
-      let cached = cache.get(id);
-      if (!cached) {
-        cached = await this.fetchSingle(id, cwd);
-        cache.set(id, cached);
+    for (let i = 0; i < uniqueIds.length; i += this.batchSize) {
+      const chunk = uniqueIds.slice(i, i + this.batchSize);
+      const batchResults = await this.fetchBatch(chunk, cwd);
+      for (const [id, info] of batchResults) {
+        resolvedById.set(id, info);
       }
-      results.push({ ref, ...cached });
     }
 
-    return results;
+    return bdRefs.map(({ ref, id }) => {
+      const info = resolvedById.get(id) ?? {
+        id,
+        available: false,
+        found: false,
+        error: `Missing Beads resolution result for '${id}'`,
+      };
+      return { ref, ...info };
+    });
   }
 
-  private async fetchSingle(id: string, cwd: string): Promise<Omit<BeadStatusInfo, "ref">> {
+  private markAll(
+    ids: string[],
+    factory: (id: string) => Omit<BeadStatusInfo, "ref">
+  ): Map<string, Omit<BeadStatusInfo, "ref">> {
+    const out = new Map<string, Omit<BeadStatusInfo, "ref">>();
+    for (const id of ids) {
+      out.set(id, factory(id));
+    }
+    return out;
+  }
+
+  private async fetchBatch(
+    ids: string[],
+    cwd: string
+  ): Promise<Map<string, Omit<BeadStatusInfo, "ref">>> {
+    const idArgs = ids.map((id) => (id.startsWith("-") ? `--id=${id}` : id));
     let proc: ReturnType<typeof Bun.spawn>;
     try {
-      proc = Bun.spawn([this.bdBin, "--readonly", "show", id, "--json"], {
+      proc = Bun.spawn([this.bdBin, "--readonly", "show", ...idArgs, "--json"], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
       });
     } catch (error) {
-      return {
+      return this.markAll(ids, (id) => ({
         id,
         available: false,
         found: false,
         error: `Failed to spawn ${this.bdBin}: ${(error as Error).message}`,
-      };
+      }));
     }
 
     let timedOut = false;
@@ -92,60 +117,88 @@ export class CliBeadsClient implements BeadsClient {
       ]);
 
       if (timedOut) {
-        return {
+        return this.markAll(ids, (id) => ({
           id,
           available: false,
           found: false,
           error: `Timed out invoking ${this.bdBin} after ${this.timeoutMs}ms`,
-        };
+        }));
       }
 
       if (code === 0) {
         try {
           const parsed = JSON.parse(stdout.trim());
-          const item = Array.isArray(parsed) ? parsed[0] : parsed;
-          if (!item || typeof item !== "object") {
-            return {
+          const items = Array.isArray(parsed)
+            ? parsed
+            : parsed && typeof parsed === "object"
+            ? [parsed]
+            : null;
+          if (!items) {
+            return this.markAll(ids, (id) => ({
               id,
               available: true,
               found: false,
               error: `Empty JSON payload for '${id}'`,
-            };
+            }));
           }
-          const obj = item as Record<string, unknown>;
-          return {
-            id: typeof obj.id === "string" ? obj.id : id,
-            available: true,
-            found: true,
-            status: typeof obj.status === "string" ? obj.status : undefined,
-            title: typeof obj.title === "string" ? obj.title : undefined,
-          };
+
+          const out = new Map<string, Omit<BeadStatusInfo, "ref">>();
+          for (const raw of items) {
+            if (!raw || typeof raw !== "object") continue;
+            const obj = raw as Record<string, unknown>;
+            const resolvedId =
+              typeof obj.id === "string" && obj.id.trim()
+                ? obj.id
+                : ids.length === 1
+                ? ids[0]!
+                : "";
+            if (!resolvedId) continue;
+            out.set(resolvedId, {
+              id: resolvedId,
+              available: true,
+              found: true,
+              status: typeof obj.status === "string" ? obj.status : undefined,
+              title: typeof obj.title === "string" ? obj.title : undefined,
+            });
+          }
+
+          for (const id of ids) {
+            if (!out.has(id)) {
+              out.set(id, {
+                id,
+                available: true,
+                found: false,
+                error: `Beads issue '${id}' not found`,
+              });
+            }
+          }
+          return out;
         } catch (error) {
-          return {
+          return this.markAll(ids, (id) => ({
             id,
             available: false,
             found: false,
             error: `Invalid JSON from ${this.bdBin}: ${(error as Error).message}`,
-          };
+          }));
         }
       }
 
       const combined = `${stdout}\n${stderr}`.trim();
       if (/no issues? found|not found/i.test(combined)) {
-        return {
+        return this.markAll(ids, (id) => ({
           id,
           available: true,
           found: false,
           error: `Beads issue '${id}' not found`,
-        };
+        }));
       }
 
-      return {
+      return this.markAll(ids, (id) => ({
         id,
         available: false,
         found: false,
         error: combined || `${this.bdBin} exited with code ${code}`,
-      };
+      }));
     } finally {
       clearTimeout(timer);
     }

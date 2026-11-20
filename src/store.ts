@@ -1068,26 +1068,48 @@ export class RoadmapService {
   async checkWithBeads(options: {
     beads?: boolean;
     beadsClient?: BeadsClient;
+    loaded?: LoadedStore;
   } = {}): Promise<CheckResult> {
-    const base = this.check();
+    let loaded = options.loaded;
+    if (!loaded) {
+      if (!this.isInitialized()) {
+        return this.check();
+      }
+      try {
+        loaded = this.load();
+      } catch {
+        return this.check();
+      }
+    }
+
+    const base = this.checkLoaded(loaded);
     if (!options.beads) {
       return base;
     }
-    if (
-      base.errors.some(
-        (e) => e.code === "NOT_INITIALIZED" || e.code === "CONFIG_PARSE_ERROR"
-      )
-    ) {
-      return base;
-    }
 
-    const loaded = this.load();
+    const allUniqueRefs = [
+      ...new Set(
+        loaded.features.flatMap((f) => extractBeadRefs(f.refs).map((b) => b.ref))
+      ),
+    ];
     const beadsClient = options.beadsClient ?? new CliBeadsClient();
     const resolvedMap: Record<string, BeadStatusInfo[]> = {};
 
-    for (const feature of loaded.features) {
-      if (extractBeadRefs(feature.refs).length > 0) {
-        resolvedMap[feature.id] = await beadsClient.resolveRefs(feature.refs, this.rootDir);
+    if (allUniqueRefs.length > 0) {
+      const resolvedAll = await beadsClient.resolveRefs(allUniqueRefs, this.rootDir);
+      const byRef = new Map<string, BeadStatusInfo>(resolvedAll.map((r) => [r.ref, r]));
+      const byId = new Map<string, BeadStatusInfo>(resolvedAll.map((r) => [r.id, r]));
+
+      for (const feature of loaded.features) {
+        const featureBdRefs = extractBeadRefs(feature.refs);
+        if (featureBdRefs.length > 0) {
+          resolvedMap[feature.id] = featureBdRefs
+            .map((b) => {
+              const hit = byRef.get(b.ref) ?? byId.get(b.id);
+              return hit ? { ...hit, ref: b.ref } : undefined;
+            })
+            .filter((info): info is BeadStatusInfo => info !== undefined);
+        }
       }
     }
 

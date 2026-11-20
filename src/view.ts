@@ -704,6 +704,7 @@ export function startViewServer(
           const check = await service.checkWithBeads({
             beads: loaded.config.integrations.beads.enabled,
             beadsClient,
+            loaded,
           });
 
           // Include synthetic Backlog group if features reference default milestone without file
