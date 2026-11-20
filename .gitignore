@@ -1,0 +1,19 @@
+# Dependencies & build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+*.swp
+
+# Beads task tracking (local-only routing, never commit)
+.beads/
+.beads-credential-key
+.dolt/
