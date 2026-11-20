@@ -209,7 +209,7 @@ Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer,
 
 ### TUI Views, Filters & Health Diagnostics (`tui-views-and-filters`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `tui-core-engine` | **Refs:** `bd:pp-02n.2`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-core-engine` | **Refs:** `bd:pp-02n.2`
 
 Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, responsive Milestone Cards, and Status Board columns.
 

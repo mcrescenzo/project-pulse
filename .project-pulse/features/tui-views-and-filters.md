@@ -3,7 +3,7 @@ id: tui-views-and-filters
 title: "TUI Views, Filters & Health Diagnostics"
 milestone: v0.4
 order: 20
-status: planned
+status: in-progress
 area: UI
 depends_on:
   - tui-core-engine
