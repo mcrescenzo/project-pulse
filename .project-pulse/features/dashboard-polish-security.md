@@ -3,7 +3,7 @@ id: dashboard-polish-security
 title: "Dashboard Security, Accessibility & Visual Polish"
 milestone: v0.2
 order: 30
-status: in-progress
+status: shipped
 area: UI
 depends_on:
   - local-browser-view

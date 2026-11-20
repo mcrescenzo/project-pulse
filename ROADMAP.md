@@ -72,7 +72,7 @@ Localhost web viewer powered by Bun.serve with file-watch live reload.
 
 ## v0.2 — Hardening & UX Polish (`v0.2`)
 
-**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 2/3 features shipped
+**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 3/3 features shipped
 
 Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhost CSRF protection, dashboard accessibility, and Playwright regression tests.
 
@@ -105,7 +105,7 @@ Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invoca
 
 ### Dashboard Security, Accessibility & Visual Polish (`dashboard-polish-security`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `local-browser-view` | **Refs:** `bd:pp-01q.3`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `local-browser-view` | **Refs:** `bd:pp-01q.3`
 
 Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/ARIA accessible, preserves drafts across SSE reloads, and polishes visual hierarchy.
 
