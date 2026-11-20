@@ -17,3 +17,7 @@ Thumbs.db
 .beads/
 .beads-credential-key
 .dolt/
+
+# Beads / Dolt files (added by bd init)
+*.db
+.beads/proxieddb/
