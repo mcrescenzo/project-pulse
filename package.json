@@ -9,6 +9,10 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:ui": "bun test tests/ui.test.ts",
     "pp": "bun run ./src/cli.ts"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
   }
 }

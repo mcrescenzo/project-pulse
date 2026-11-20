@@ -154,4 +154,79 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
 
     await reader.cancel();
   });
+
+  test("enforces localhost CSRF checks, rejects non-JSON / bad origins, and handles 404 and favicon", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Security Demo" });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "active" });
+    svc.addFeature({ id: "safe-feat", title: "Safe Feature", milestone: "v0.1", status: "planned" });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    const endpoint = `${handle.url}/api/features/safe-feat/pulse`;
+
+    // Favicon returns 200 SVG without 404
+    const faviconRes = await fetch(`${handle.url}/favicon.ico`);
+    expect(faviconRes.status).toBe(200);
+    expect(faviconRes.headers.get("content-type")).toContain("image/svg+xml");
+
+    // Non-JSON Content-Type -> 415
+    const textRes = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(textRes.status).toBe(415);
+
+    // Cross-origin -> 403
+    const crossOrigin = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(crossOrigin.status).toBe(403);
+
+    // Null Origin -> 403
+    const nullOrigin = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "null" },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(nullOrigin.status).toBe(403);
+
+    // Cross-site Sec-Fetch-Site -> 403
+    const crossSite = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "cross-site" },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(crossSite.status).toBe(403);
+
+    // Spoofed Host -> 403
+    const badHost = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: "evil.example:4310" },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(badHost.status).toBe(403);
+
+    // Same-origin localhost mutation succeeds
+    const validRes = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://127.0.0.1:${handle.port}`,
+        "Sec-Fetch-Site": "same-origin",
+      },
+      body: JSON.stringify({ status: "in-progress" }),
+    });
+    expect(validRes.status).toBe(200);
+
+    // Unknown feature returns 404
+    const notFoundRes = await fetch(`${handle.url}/api/features/does-not-exist/pulse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "shipped" }),
+    });
+    expect(notFoundRes.status).toBe(404);
+  });
 });

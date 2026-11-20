@@ -105,15 +105,17 @@ Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invoca
 
 ### Dashboard Security, Accessibility & Visual Polish (`dashboard-polish-security`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `local-browser-view` | **Refs:** `bd:pp-01q.3`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `local-browser-view` | **Refs:** `bd:pp-01q.3`
 
 Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/ARIA accessible, preserves drafts across SSE reloads, and polishes visual hierarchy.
 
-**Ship Criteria (0/4):**
-- [ ] Enforces localhost Origin/Host and application/json checks on POST /api/features/:id/pulse
-- [ ] Provides keyboard-accessible cards, ARIA dialog drawer with Escape-to-close, labeled filters, and inline saving feedback
-- [ ] Preserves unsaved drawer drafts across SSE reloads and adds clickable health/drift popover and light/dark theme toggle
-- [ ] Shows 1-line card descriptions with reduced tag noise, serves inline favicon, fixes mobile KPI grid, and adds Playwright UI regression tests
+**Ship Criteria (4/4):**
+- [x] Enforces localhost Origin/Host and application/json checks on POST /api/features/:id/pulse
+- [x] Provides keyboard-accessible cards, ARIA dialog drawer with Escape-to-close, labeled filters, and inline saving feedback
+- [x] Preserves unsaved drawer drafts across SSE reloads and adds clickable health/drift popover and light/dark theme toggle
+- [x] Shows 1-line card descriptions with reduced tag noise, serves inline favicon, fixes mobile KPI grid, and adds Playwright UI regression tests
+
+> **Latest Pulse (2026-11-20T14:09:32.823Z):** Added localhost CSRF validation, keyboard/ARIA accessibility, SSE draft preservation, clickable health panel, theme toggle, responsive 6-card KPI grid, favicon, and Playwright UI regression suite.
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
