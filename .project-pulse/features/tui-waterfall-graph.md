@@ -3,7 +3,7 @@ id: tui-waterfall-graph
 title: TUI Waterfall Dependency Graph
 milestone: v0.4
 order: 30
-status: planned
+status: in-progress
 area: UI
 depends_on:
   - tui-core-engine

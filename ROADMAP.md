@@ -222,7 +222,7 @@ Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, r
 
 ### TUI Waterfall Dependency Graph (`tui-waterfall-graph`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `tui-core-engine`, `dashboard-view-modes` | **Refs:** `bd:pp-02n.3`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-core-engine`, `dashboard-view-modes` | **Refs:** `bd:pp-02n.3`
 
 Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, click-and-drag panning, and dependency chain highlighting.
 

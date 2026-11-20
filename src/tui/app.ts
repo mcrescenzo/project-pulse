@@ -1,6 +1,16 @@
 import type { BeadsClient } from "../beads";
 import { buildRoadmapViewPayload } from "../view";
 import { RoadmapService } from "../store";
+import {
+  clampGraphCamera,
+  computeWaterfallLayout,
+  fitGraphCamera,
+  getGraphViewportRect,
+  renderWaterfallGraphView,
+  resetGraphCamera,
+  stepGraphZoom,
+  type WaterfallLayout,
+} from "./graph";
 import { NodeTerminalSession, type InputEvent, type KeyEvent, type MouseEvent, type TerminalSession } from "./input";
 import { diffBuffers, ScreenBuffer, TUI_PALETTE, type HitRegion } from "./screen";
 import {
@@ -46,7 +56,16 @@ export class TuiController {
   private lastOrderedIds: string[] = [];
   private lastCardsMaxScroll = 0;
   private lastBoardCols: string[] = [];
+  private lastGraphLayout: WaterfallLayout | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
+  private graphDrag: {
+    startX: number;
+    startY: number;
+    startTx: number;
+    startTy: number;
+    dragging: boolean;
+    targetNodeId: string | null;
+  } | null = null;
   private loadGeneration = 0;
 
   constructor(options: TuiControllerOptions) {
@@ -160,25 +179,17 @@ export class TuiController {
       const res = renderCardsView(buf, rect, this.state, filtered);
       this.lastCardsMaxScroll = res.maxScrollY;
       this.lastOrderedIds = res.orderedFeatureIds;
+      this.lastGraphLayout = null;
     } else if (this.state.viewMode === "board") {
       const res = renderBoardView(buf, rect, this.state, filtered);
       this.lastBoardCols = res.columns;
       this.lastOrderedIds = res.orderedFeatureIds;
+      this.lastGraphLayout = null;
     } else {
-      buf.drawBox(rect.x + 1, rect.y, Math.max(20, rect.w - 2), rect.h, {
-        borderStyle: { fg: TUI_PALETTE.border },
-        fillStyle: { bg: TUI_PALETTE.surface },
-        title: "Waterfall Dependency Graph",
-        titleStyle: { fg: TUI_PALETTE.accent, bold: true },
-      });
-      buf.writeText(
-        rect.x + 3,
-        rect.y + 2,
-        `Showing ${filtered.filteredFeatures.length} feature(s) in Graph view.`,
-        rect.w - 6,
-        { fg: TUI_PALETTE.muted }
-      );
-      this.lastOrderedIds = filtered.filteredFeatures.map((f) => f.id);
+      this.lastGraphLayout = renderWaterfallGraphView(buf, rect, this.state, filtered);
+      this.lastOrderedIds = this.lastGraphLayout
+        ? this.lastGraphLayout.orderedNodes.map((n) => n.feature.id)
+        : [];
     }
 
     renderFloatingPicker(buf, w, h, this.state);
@@ -304,6 +315,53 @@ export class TuiController {
       this.reloadSync();
       return;
     }
+    if (this.state.viewMode === "graph") {
+      if (ev.key === "+" || ev.key === "=") {
+        this.zoomGraph(1);
+        return;
+      }
+      if (ev.key === "-") {
+        this.zoomGraph(-1);
+        return;
+      }
+      if (ev.key === "0") {
+        this.resetGraph();
+        return;
+      }
+      if (ev.key === "f" || ev.key === "F") {
+        this.fitGraph();
+        return;
+      }
+      if (ev.key === "h") {
+        this.toggleGraphHover();
+        return;
+      }
+      if (ev.key === "left") {
+        this.panGraph(4, 0);
+        return;
+      }
+      if (ev.key === "right") {
+        this.panGraph(-4, 0);
+        return;
+      }
+      if (ev.key === "down" || ev.key === "j") {
+        this.moveSelection(1);
+        return;
+      }
+      if (ev.key === "up" || ev.key === "k") {
+        this.moveSelection(-1);
+        return;
+      }
+      if (ev.key === "enter") {
+        const fid = this.state.graphSelectedId ?? this.state.selectedFeatureId;
+        if (fid) {
+          this.state.selectedFeatureId = fid;
+          this.state.drawerFeatureId = fid;
+          this.render();
+        }
+        return;
+      }
+    }
     if (ev.key === "down" || ev.key === "j") {
       this.moveSelection(1);
       return;
@@ -328,11 +386,59 @@ export class TuiController {
 
   private handleMouse(ev: MouseEvent): void {
     const hit = this.currentBuf.hitTest(ev.x, ev.y);
+    if (ev.action === "move") {
+      if (this.state.viewMode === "graph" && this.state.graphHoverEnabled) {
+        const nextHover = hit?.kind === "graph-node" ? String(hit.data ?? "") : null;
+        if (nextHover !== this.state.graphHoverId) {
+          this.state.graphHoverId = nextHover;
+          this.render();
+        }
+      }
+      return;
+    }
+    if (ev.action === "drag" && this.graphDrag) {
+      const dx = ev.x - this.graphDrag.startX;
+      const dy = ev.y - this.graphDrag.startY;
+      if (!this.graphDrag.dragging && Math.hypot(dx, dy) >= 2) {
+        this.graphDrag.dragging = true;
+      }
+      if (this.graphDrag.dragging && this.lastGraphLayout) {
+        const vpRect = getGraphViewportRect(this.mainRect);
+        this.state.graphCamera.tx = this.graphDrag.startTx + dx;
+        this.state.graphCamera.ty = this.graphDrag.startTy + dy;
+        clampGraphCamera(
+          this.lastGraphLayout.stageW,
+          this.lastGraphLayout.stageH,
+          vpRect,
+          this.state.graphCamera
+        );
+        this.render();
+      }
+      return;
+    }
+    if (ev.action === "up") {
+      if (this.graphDrag) {
+        const drag = this.graphDrag;
+        this.graphDrag = null;
+        if (!drag.dragging) {
+          this.handleGraphClick(drag.targetNodeId);
+        }
+      }
+      return;
+    }
     if (ev.action === "wheel-down") {
+      if (this.state.viewMode === "graph" && (hit?.kind === "graph-viewport" || hit?.kind === "graph-node")) {
+        this.zoomGraph(-1);
+        return;
+      }
       this.scrollAtPoint(ev.x, ev.y, 3, hit);
       return;
     }
     if (ev.action === "wheel-up") {
+      if (this.state.viewMode === "graph" && (hit?.kind === "graph-viewport" || hit?.kind === "graph-node")) {
+        this.zoomGraph(1);
+        return;
+      }
       this.scrollAtPoint(ev.x, ev.y, -3, hit);
       return;
     }
@@ -340,6 +446,48 @@ export class TuiController {
 
     this.state.searchFocused = false;
     switch (hit.kind) {
+      case "graph-hover-toggle": {
+        this.toggleGraphHover();
+        break;
+      }
+      case "graph-zoom-out": {
+        this.zoomGraph(-1);
+        break;
+      }
+      case "graph-zoom-in": {
+        this.zoomGraph(1);
+        break;
+      }
+      case "graph-zoom-reset": {
+        this.resetGraph();
+        break;
+      }
+      case "graph-zoom-fit": {
+        this.fitGraph();
+        break;
+      }
+      case "graph-viewport": {
+        this.graphDrag = {
+          startX: ev.x,
+          startY: ev.y,
+          startTx: this.state.graphCamera.tx,
+          startTy: this.state.graphCamera.ty,
+          dragging: false,
+          targetNodeId: null,
+        };
+        break;
+      }
+      case "graph-node": {
+        this.graphDrag = {
+          startX: ev.x,
+          startY: ev.y,
+          startTx: this.state.graphCamera.tx,
+          startTy: this.state.graphCamera.ty,
+          dragging: false,
+          targetNodeId: String(hit.data ?? ""),
+        };
+        break;
+      }
       case "view-tab": {
         this.state.openPicker = null;
         this.switchView(hit.data as TuiViewMode);
@@ -504,8 +652,108 @@ export class TuiController {
           ? 0
           : this.lastOrderedIds.length - 1
         : Math.max(0, Math.min(this.lastOrderedIds.length - 1, idx + delta));
-    this.state.selectedFeatureId = this.lastOrderedIds[nextIdx] ?? null;
+    const nextId = this.lastOrderedIds[nextIdx] ?? null;
+    this.state.selectedFeatureId = nextId;
+    if (this.state.viewMode === "graph") {
+      this.state.graphSelectedId = nextId;
+      this.render();
+      return;
+    }
     this.scrollActiveView(delta * 2);
+  }
+
+  private handleGraphClick(targetNodeId: string | null): void {
+    if (!targetNodeId) {
+      this.state.graphSelectedId = null;
+      this.render();
+      return;
+    }
+    if (this.state.graphHoverEnabled) {
+      this.state.selectedFeatureId = targetNodeId;
+      this.state.graphSelectedId = targetNodeId;
+      this.state.drawerFeatureId = targetNodeId;
+      this.render();
+      return;
+    }
+    if (this.state.graphSelectedId === targetNodeId) {
+      this.state.selectedFeatureId = targetNodeId;
+      this.state.drawerFeatureId = targetNodeId;
+    } else {
+      this.state.graphSelectedId = targetNodeId;
+      this.state.selectedFeatureId = targetNodeId;
+    }
+    this.render();
+  }
+
+  private toggleGraphHover(): void {
+    this.state.graphHoverEnabled = !this.state.graphHoverEnabled;
+    if (!this.state.graphHoverEnabled) {
+      this.state.graphHoverId = null;
+    }
+    this.session.setMouseMode({
+      enabled: this.state.mouseEnabled,
+      hover: this.state.graphHoverEnabled,
+    });
+    this.render();
+  }
+
+  private panGraph(dx: number, dy: number): void {
+    if (!this.lastGraphLayout) return;
+    const vpRect = getGraphViewportRect(this.mainRect);
+    this.state.graphCamera.tx += dx;
+    this.state.graphCamera.ty += dy;
+    clampGraphCamera(
+      this.lastGraphLayout.stageW,
+      this.lastGraphLayout.stageH,
+      vpRect,
+      this.state.graphCamera
+    );
+    this.render();
+  }
+
+  private zoomGraph(delta: number): void {
+    const nextZoom = stepGraphZoom(this.state.graphCamera.zoom, delta);
+    if (nextZoom === this.state.graphCamera.zoom) return;
+    this.state.graphCamera.zoom = nextZoom;
+    const filtered = computeFilteredData(this.state);
+    const vpRect = getGraphViewportRect(this.mainRect);
+    const nextLayout = computeWaterfallLayout(
+      filtered.filteredFeatures,
+      this.state.payload.milestones,
+      nextZoom
+    );
+    const innerW = Math.max(1, vpRect.w - 2);
+    const innerH = Math.max(1, vpRect.h - 2);
+    this.state.graphCamera.tx = Math.floor((innerW - nextLayout.stageW) / 2);
+    this.state.graphCamera.ty =
+      nextLayout.stageH <= innerH ? Math.floor((innerH - nextLayout.stageH) / 2) : 0;
+    clampGraphCamera(nextLayout.stageW, nextLayout.stageH, vpRect, this.state.graphCamera);
+    this.lastGraphLayout = nextLayout;
+    this.render();
+  }
+
+  private resetGraph(): void {
+    const filtered = computeFilteredData(this.state);
+    const vpRect = getGraphViewportRect(this.mainRect);
+    this.lastGraphLayout = resetGraphCamera(
+      filtered.filteredFeatures,
+      this.state.payload.milestones,
+      vpRect,
+      this.state.graphCamera
+    );
+    this.render();
+  }
+
+  private fitGraph(): void {
+    const filtered = computeFilteredData(this.state);
+    const vpRect = getGraphViewportRect(this.mainRect);
+    this.lastGraphLayout = fitGraphCamera(
+      filtered.filteredFeatures,
+      this.state.payload.milestones,
+      vpRect,
+      this.state.graphCamera
+    );
+    this.render();
   }
 
   private scrollActiveView(delta: number): void {
