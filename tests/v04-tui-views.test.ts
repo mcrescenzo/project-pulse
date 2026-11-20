@@ -244,4 +244,78 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       ctrl.stop();
     }
   });
+
+  test("centers view tabs in row 0 on wide/medium terminals and falls back cleanly on narrow terminals", () => {
+    seedRoadmap(tempDir);
+    const session = new VirtualSession(140, 40);
+    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
+    ctrl.start();
+
+    try {
+      const regions = ctrl.getBuffer().getHitRegions();
+      const tabCards = regions.find((r) => r.id === "tab-cards");
+      const tabGraph = regions.find((r) => r.id === "tab-graph");
+      const tabBoard = regions.find((r) => r.id === "tab-board");
+      const refreshBtn = regions.find((r) => r.id === "refresh-btn");
+
+      expect(tabCards).toBeDefined();
+      expect(tabGraph).toBeDefined();
+      expect(tabBoard).toBeDefined();
+      expect(refreshBtn).toBeDefined();
+
+      expect(tabCards!.y).toBe(0);
+      expect(tabGraph!.y).toBe(0);
+      expect(tabBoard!.y).toBe(0);
+      expect(tabCards!.x).toBeGreaterThan("TUI Test Project".length + 1);
+      expect(tabBoard!.x + tabBoard!.w).toBeLessThan(refreshBtn!.x);
+      expect(Math.abs((tabCards!.x + tabBoard!.x + tabBoard!.w) / 2 - 70)).toBeLessThanOrEqual(2);
+
+      const row0Wide = ctrl.getBuffer().toPlainLines()[0]!;
+      expect(row0Wide).toContain("TUI Test Project");
+      expect(row0Wide).toContain("1 Milestone Cards");
+      expect(row0Wide).toContain("2 Dependency Graph");
+      expect(row0Wide).toContain("3 Status Board");
+      expect(row0Wide).toContain("Check OK");
+
+      session.clickRegion(ctrl, "tab-graph");
+      expect(ctrl.getState().viewMode).toBe("graph");
+      session.clickRegion(ctrl, "tab-board");
+      expect(ctrl.getState().viewMode).toBe("board");
+      session.clickRegion(ctrl, "tab-cards");
+      expect(ctrl.getState().viewMode).toBe("cards");
+
+      // Medium width (96 cols): compact tabs sit in row 0 without overlapping right pills or truncating title
+      session.width = 96;
+      session.height = 30;
+      ctrl.render();
+      const medRegions = ctrl.getBuffer().getHitRegions();
+      const medCards = medRegions.find((r) => r.id === "tab-cards")!;
+      const medBoard = medRegions.find((r) => r.id === "tab-board")!;
+      const medRefresh = medRegions.find((r) => r.id === "refresh-btn")!;
+      expect(medCards.y).toBe(0);
+      expect(medBoard.y).toBe(0);
+      expect(medCards.x).toBeGreaterThan("TUI Test Project".length + 1);
+      expect(medBoard.x + medBoard.w).toBeLessThan(medRefresh.x);
+      const row0Med = ctrl.getBuffer().toPlainLines()[0]!;
+      expect(row0Med).toContain("TUI Test Project");
+      expect(row0Med).toContain("1 Cards");
+      expect(row0Med).toContain("2 Graph");
+      expect(row0Med).toContain("3 Board");
+
+      // Ultra-narrow width (78 cols): tabs fall back below row 0 and keep project title untruncated
+      session.width = 78;
+      session.height = 24;
+      ctrl.render();
+      const narrowRegions = ctrl.getBuffer().getHitRegions();
+      const narrowCards = narrowRegions.find((r) => r.id === "tab-cards")!;
+      const narrowGraph = narrowRegions.find((r) => r.id === "tab-graph")!;
+      const narrowBoard = narrowRegions.find((r) => r.id === "tab-board")!;
+      expect(narrowCards.y).toBeGreaterThan(0);
+      expect(narrowGraph.y).toBeGreaterThan(0);
+      expect(narrowBoard.y).toBeGreaterThan(0);
+      expect(ctrl.getBuffer().toPlainLines()[0]!).toContain("TUI Test Project");
+    } finally {
+      ctrl.stop();
+    }
+  });
 });

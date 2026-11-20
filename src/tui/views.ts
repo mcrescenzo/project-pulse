@@ -371,12 +371,55 @@ class ClipWriter {
   }
 }
 
+const VIEW_TABS_FULL: Array<{ id: TuiViewMode; label: string }> = [
+  { id: "cards", label: "1 Milestone Cards" },
+  { id: "graph", label: "2 Dependency Graph" },
+  { id: "board", label: "3 Status Board" },
+];
+
+const VIEW_TABS_COMPACT: Array<{ id: TuiViewMode; label: string }> = [
+  { id: "cards", label: "1 Cards" },
+  { id: "graph", label: "2 Graph" },
+  { id: "board", label: "3 Board" },
+];
+
+function measurePillRowWidth(labels: string[]): number {
+  return (
+    labels.reduce((sum, label) => sum + Array.from(label).length + 2, 0) + Math.max(0, labels.length - 1)
+  );
+}
+
+function drawViewTabs(
+  buf: ScreenBuffer,
+  startX: number,
+  y: number,
+  state: TuiState,
+  opts: { compact: boolean; inHeader: boolean }
+): void {
+  const tabs = opts.compact ? VIEW_TABS_COMPACT : VIEW_TABS_FULL;
+  let tx = startX;
+  for (const tab of tabs) {
+    const active = state.viewMode === tab.id;
+    const used = drawPill(
+      buf,
+      tx,
+      y,
+      tab.label,
+      active
+        ? { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true }
+        : { fg: TUI_PALETTE.muted, bg: opts.inHeader ? TUI_PALETTE.surface2 : TUI_PALETTE.surface },
+      { id: `tab-${tab.id}`, kind: "view-tab", data: tab.id }
+    );
+    tx += used + 1;
+  }
+}
+
 export function renderHeaderAndKpis(
   buf: ScreenBuffer,
   width: number,
   state: TuiState,
   filtered: FilteredData
-): number {
+): { nextY: number; tabsInHeader: boolean } {
   const { payload } = state;
   const errCount = payload.check.errors.length;
   const warnCount = payload.check.warnings.length;
@@ -425,19 +468,50 @@ export function renderHeaderAndKpis(
 
   const totalRightW =
     rightPills.reduce((sum, p) => sum + Array.from(p.label).length + 2, 0) + (rightPills.length - 1);
+  const rightStartX = Math.max(1, width - totalRightW - 1);
+  const projectTitle = payload.config.project.name || "Project Pulse";
+  const reservedLeftW = Math.min(Array.from(projectTitle).length, 22);
+  const centerMinX = 1 + reservedLeftW + 2;
+  const centerMaxX = rightStartX - 2;
+  const centerAvailW = centerMaxX - centerMinX;
+
+  const fullTabsW = measurePillRowWidth(VIEW_TABS_FULL.map((t) => t.label));
+  const compactTabsW = measurePillRowWidth(VIEW_TABS_COMPACT.map((t) => t.label));
+  const headerTabsMode: "full" | "compact" | "none" =
+    centerAvailW >= fullTabsW ? "full" : centerAvailW >= compactTabsW ? "compact" : "none";
+  const tabsW =
+    headerTabsMode === "full" ? fullTabsW : headerTabsMode === "compact" ? compactTabsW : 0;
+
+  let tabsX = 0;
+  if (headerTabsMode !== "none") {
+    const idealX = Math.floor((width - tabsW) / 2);
+    tabsX =
+      idealX >= centerMinX && idealX + tabsW <= centerMaxX
+        ? idealX
+        : centerMinX + Math.floor((centerAvailW - tabsW) / 2);
+  }
 
   buf.fillRect(0, 0, width, 1, { bg: TUI_PALETTE.surface });
-  const titleMax = Math.max(12, width - totalRightW - 3);
-  buf.writeText(1, 0, payload.config.project.name || "Project Pulse", titleMax, {
+  const titleMax =
+    headerTabsMode !== "none" ? Math.max(8, tabsX - 3) : Math.max(12, width - totalRightW - 3);
+  buf.writeText(1, 0, projectTitle, titleMax, {
     fg: TUI_PALETTE.text,
     bold: true,
   });
 
-  let rx = Math.max(1, width - totalRightW - 1);
+  if (headerTabsMode !== "none") {
+    drawViewTabs(buf, tabsX, 0, state, {
+      compact: headerTabsMode === "compact",
+      inHeader: true,
+    });
+  }
+
+  let rx = rightStartX;
   for (const p of rightPills) {
     const used = drawPill(buf, rx, 0, p.label, p.style, p.hit);
     rx += used + 1;
   }
+  const tabsInHeader = headerTabsMode !== "none";
 
   let nextY = 1;
   if (state.viewMode !== "graph" && payload.config.project.summary) {
@@ -502,7 +576,7 @@ export function renderHeaderAndKpis(
       });
       kx += seg.length + 2;
     }
-    return nextY + 1;
+    return { nextY: nextY + 1, tabsInHeader };
   }
 
   const gap = 1;
@@ -536,7 +610,7 @@ export function renderHeaderAndKpis(
       data: k.filterValue,
     });
   }
-  return nextY + 3;
+  return { nextY: nextY + 3, tabsInHeader };
 }
 
 export function renderTabsAndFilters(
@@ -544,32 +618,17 @@ export function renderTabsAndFilters(
   y: number,
   width: number,
   state: TuiState,
-  filtered: FilteredData
+  filtered: FilteredData,
+  tabsInHeader = false
 ): number {
-  const tabs: Array<{ id: TuiViewMode; label: string }> = [
-    { id: "cards", label: "1 Milestone Cards" },
-    { id: "graph", label: "2 Dependency Graph" },
-    { id: "board", label: "3 Status Board" },
-  ];
-
-  buf.fillRect(0, y, width, 2, { bg: TUI_PALETTE.bg });
-  let tx = 1;
-  for (const tab of tabs) {
-    const active = state.viewMode === tab.id;
-    const used = drawPill(
-      buf,
-      tx,
-      y,
-      tab.label,
-      active
-        ? { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true }
-        : { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface },
-      { id: `tab-${tab.id}`, kind: "view-tab", data: tab.id }
-    );
-    tx += used + 1;
+  if (!tabsInHeader) {
+    buf.fillRect(0, y, width, 2, { bg: TUI_PALETTE.bg });
+    drawViewTabs(buf, 1, y, state, { compact: width < 64, inHeader: false });
+  } else {
+    buf.fillRect(0, y, width, 1, { bg: TUI_PALETTE.bg });
   }
 
-  const filterY = y + 1;
+  const filterY = tabsInHeader ? y : y + 1;
   let fx = 1;
 
   const filterBtns: Array<{ kind: PickerKind; prefix: string; val: string }> = [

@@ -214,8 +214,8 @@ export class TuiController {
     buf.clear({ bg: TUI_PALETTE.bg, fg: TUI_PALETTE.text });
 
     const filtered = computeFilteredData(this.state);
-    let y = renderHeaderAndKpis(buf, w, this.state, filtered);
-    y = renderTabsAndFilters(buf, y, w, this.state, filtered);
+    const header = renderHeaderAndKpis(buf, w, this.state, filtered);
+    const y = renderTabsAndFilters(buf, header.nextY, w, this.state, filtered, header.tabsInHeader);
 
     const contentH = Math.max(4, h - y - 1);
     const hasDrawer =
