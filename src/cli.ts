@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
+import { joinOrStartHub } from "./hub";
 import { runMcpServer } from "./mcp";
 import {
   findProjectRoot,
@@ -51,6 +52,7 @@ const BOOLEAN_FLAGS = new Set([
   "undone",
   "agents-snippet",
   "no-open",
+  "standalone",
   "force",
 ]);
 
@@ -99,7 +101,7 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   "feature remove": { value: [], boolean: ["force"] },
   render: { value: [], boolean: [] },
   check: { value: [], boolean: ["beads"] },
-  view: { value: ["port"], boolean: ["no-open"] },
+  view: { value: ["port"], boolean: ["no-open", "standalone"] },
   mcp: { value: [], boolean: [] },
 };
 
@@ -238,7 +240,7 @@ Usage:
   pp feature remove <id> [--force] [--json]
   pp render [--json]
   pp check [--beads] [--json]
-  pp view [--port <n>] [--no-open]
+  pp view [--port <n>] [--standalone] [--no-open]
   pp mcp
   pp --help | --version
 
@@ -674,33 +676,30 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           throw new Error(`Unexpected argument '${subcmd}' for 'view'`);
         }
         const port = parseOptionalNumber(getFlag(parsed, "port"), "port") ?? 4310;
-        const handle = startViewServer(rootDir, { port, beadsClient });
-        console.log(`Project Pulse dashboard listening at ${handle.url}`);
+        const noOpen = parsed.booleans.has("no-open");
 
-        if (!parsed.booleans.has("no-open")) {
-          const opener =
-            process.platform === "darwin"
-              ? ["open", handle.url]
-              : process.platform === "win32"
-              ? ["cmd", "/c", "start", handle.url]
-              : ["xdg-open", handle.url];
-          try {
-            Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
-          } catch {
-            // Best-effort browser open; ignore in headless environments
-          }
+        if (parsed.booleans.has("standalone")) {
+          const handle = startViewServer(rootDir, { port, beadsClient });
+          console.log(`Project Pulse dashboard listening at ${handle.url}`);
+          if (!noOpen) openBrowser(handle.url);
+          await waitForShutdown(() => handle.stop());
+          return 0;
         }
 
-        await new Promise<void>((resolveStop) => {
-          const shutdown = () => {
-            process.off("SIGINT", shutdown);
-            process.off("SIGTERM", shutdown);
-            handle.stop();
-            resolveStop();
-          };
-          process.on("SIGINT", shutdown);
-          process.on("SIGTERM", shutdown);
-        });
+        const hubResult = await joinOrStartHub(rootDir, { port, beadsClient });
+        if (hubResult.mode === "joined") {
+          console.log(
+            `Joined Project Pulse hub at ${hubResult.url} (overview: http://127.0.0.1:${hubResult.port}/)`
+          );
+          if (!noOpen) openBrowser(hubResult.url);
+          return 0;
+        }
+
+        console.log(
+          `Project Pulse hub listening at ${hubResult.handle.url} (project: ${hubResult.url})`
+        );
+        if (!noOpen) openBrowser(hubResult.url);
+        await waitForShutdown(() => hubResult.handle.stop());
         return 0;
       }
 
@@ -722,6 +721,33 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
     }
     return 1;
   }
+}
+
+function openBrowser(targetUrl: string): void {
+  const opener =
+    process.platform === "darwin"
+      ? ["open", targetUrl]
+      : process.platform === "win32"
+      ? ["cmd", "/c", "start", targetUrl]
+      : ["xdg-open", targetUrl];
+  try {
+    Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
+  } catch {
+    // Best-effort browser open; ignore in headless environments
+  }
+}
+
+async function waitForShutdown(onStop: () => void): Promise<void> {
+  await new Promise<void>((resolveStop) => {
+    const shutdown = () => {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+      onStop();
+      resolveStop();
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  });
 }
 
 if (import.meta.main) {

@@ -125,14 +125,16 @@ Auto-joining local hub for parallel projects, alternate dashboard views, activit
 
 ### Auto-Joining Multi-Project Local Hub (`multi-project-hub`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.2`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.2`
 
 Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repositories each get their own /p/<slug> URL, watcher, and project switcher.
 
-**Ship Criteria (0/3):**
-- [ ] Running pp view in multiple repos auto-registers each repo on one hub port under /p/<slug> with isolated file watchers and SSE streams
-- [ ] Includes a header project switcher, a / portfolio overview page, and stale-path cleanup
-- [ ] Supports --standalone fallback to run an isolated single-repo server
+**Ship Criteria (3/3):**
+- [x] Running pp view in multiple repos auto-registers each repo on one hub port under /p/<slug> with isolated file watchers and SSE streams
+- [x] Includes a header project switcher, a / portfolio overview page, and stale-path cleanup
+- [x] Supports --standalone fallback to run an isolated single-repo server
+
+> **Latest Pulse (2026-11-20T14:25:19.103Z):** Implemented src/hub.ts with auto-joining localhost hub, /p/<slug> isolated watchers & SSE, / portfolio overview, project switcher, stale-path pruning, 0600 token auth, and --standalone fallback.
 
 ### Interactive Dependency Graph & Status Board Views (`dashboard-view-modes`)
 
