@@ -78,7 +78,7 @@ Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhos
 
 ### CLI Ergonomics & Core Store Hardening (`cli-core-hardening`)
 
-**Status:** `planned` | **Area:** CLI | **Depends on:** `authoring-cli`
+**Status:** `planned` | **Area:** CLI | **Depends on:** `authoring-cli` | **Refs:** `bd:pp-01q.1`
 
 Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria edits, default summary, remove commands, clean YAML, and resilient checks.
 
@@ -90,7 +90,7 @@ Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria 
 
 ### Batched & Cached Beads Resolution (`beads-resolution-perf`)
 
-**Status:** `planned` | **Area:** Integrations | **Depends on:** `orientation-and-beads`
+**Status:** `planned` | **Area:** Integrations | **Depends on:** `orientation-and-beads` | **Refs:** `bd:pp-01q.2`
 
 Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invocation caching across CLI and dashboard endpoints.
 
@@ -101,7 +101,7 @@ Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invoca
 
 ### Dashboard Security, Accessibility & Visual Polish (`dashboard-polish-security`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `local-browser-view`
+**Status:** `planned` | **Area:** UI | **Depends on:** `local-browser-view` | **Refs:** `bd:pp-01q.3`
 
 Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/ARIA accessible, preserves drafts across SSE reloads, and polishes visual hierarchy.
 

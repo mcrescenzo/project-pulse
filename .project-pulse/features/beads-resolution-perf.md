@@ -8,7 +8,7 @@ area: Integrations
 depends_on: 
   - orientation-and-beads
 refs: 
-  []
+  - bd:pp-01q.2
 ship_criteria: 
   - id: resolves-multiple-unique-beads
     text: Resolves multiple unique Beads refs via batched lookup with per-invocation cache

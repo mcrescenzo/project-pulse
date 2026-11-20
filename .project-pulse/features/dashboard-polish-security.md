@@ -8,7 +8,7 @@ area: UI
 depends_on: 
   - local-browser-view
 refs: 
-  []
+  - bd:pp-01q.3
 ship_criteria: 
   - id: enforces-localhost-origin-host
     text: Enforces localhost Origin/Host and application/json checks on POST /api/features/:id/pulse

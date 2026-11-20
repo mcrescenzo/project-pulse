@@ -8,7 +8,7 @@ area: CLI
 depends_on: 
   - authoring-cli
 refs: 
-  []
+  - bd:pp-01q.1
 ship_criteria: 
   - id: discovers-project-pulse-upward
     text: Discovers .project-pulse/ upward from any nested subdirectory
