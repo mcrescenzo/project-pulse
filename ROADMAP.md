@@ -72,13 +72,13 @@ Localhost web viewer powered by Bun.serve with file-watch live reload.
 
 ## v0.2 — Hardening & UX Polish (`v0.2`)
 
-**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 0/3 features shipped
+**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 1/3 features shipped
 
 Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhost CSRF protection, dashboard accessibility, and Playwright regression tests.
 
 ### CLI Ergonomics & Core Store Hardening (`cli-core-hardening`)
 
-**Status:** `in-progress` | **Area:** CLI | **Depends on:** `authoring-cli` | **Refs:** `bd:pp-01q.1`
+**Status:** `shipped` | **Area:** CLI | **Depends on:** `authoring-cli` | **Refs:** `bd:pp-01q.1`
 
 Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria edits, default summary, remove commands, clean YAML, and resilient checks.
 

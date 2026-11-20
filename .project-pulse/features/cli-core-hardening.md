@@ -3,7 +3,7 @@ id: cli-core-hardening
 title: CLI Ergonomics & Core Store Hardening
 milestone: v0.2
 order: 10
-status: in-progress
+status: shipped
 area: CLI
 depends_on:
   - authoring-cli
