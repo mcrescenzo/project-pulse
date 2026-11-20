@@ -190,7 +190,7 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 ## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
 
-**Status:** `active` | **Progress:** 2/4 features shipped
+**Status:** `active` | **Progress:** 3/4 features shipped
 
 Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
 
@@ -222,14 +222,16 @@ Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, r
 
 ### TUI Waterfall Dependency Graph (`tui-waterfall-graph`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-core-engine`, `dashboard-view-modes` | **Refs:** `bd:pp-02n.3`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `tui-core-engine`, `dashboard-view-modes` | **Refs:** `bd:pp-02n.3`
 
 Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, click-and-drag panning, and dependency chain highlighting.
 
-**Ship Criteria (0/3):**
-- [ ] Top-to-bottom orthogonal waterfall DAG with parent-barycenter ordering and 3 discrete density zoom levels (Full, Compact, Overview/Fit)
-- [ ] Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode
-- [ ] Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle
+**Ship Criteria (3/3):**
+- [x] Top-to-bottom orthogonal waterfall DAG with parent-barycenter ordering and 3 discrete density zoom levels (Full, Compact, Overview/Fit)
+- [x] Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode
+- [x] Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle
+
+> **Latest Pulse (2026-11-20T16:36:37.804Z):** Implemented src/tui/graph.ts, integrated pan/zoom/hover-trace controls into src/tui/app.ts, and added tests/v04-tui-graph.test.ts (merged on main at 404c910).
 
 ### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
 

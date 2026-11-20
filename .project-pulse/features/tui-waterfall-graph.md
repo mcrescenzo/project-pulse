@@ -3,7 +3,7 @@ id: tui-waterfall-graph
 title: TUI Waterfall Dependency Graph
 milestone: v0.4
 order: 30
-status: in-progress
+status: shipped
 area: UI
 depends_on:
   - tui-core-engine
@@ -13,14 +13,15 @@ refs:
 ship_criteria:
   - id: top-to-bottom-orthogonal
     text: "Top-to-bottom orthogonal waterfall DAG with parent-barycenter ordering and 3 discrete density zoom levels (Full, Compact, Overview/Fit)"
-    done: false
+    done: true
   - id: click-and-drag-panning
     text: "Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode"
-    done: false
+    done: true
   - id: hover-off-by-default
     text: "Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle"
-    done: false
+    done: true
 updates:
-  []
+  - at: 2026-11-20T16:36:37.804Z
+    note: "Implemented src/tui/graph.ts, integrated pan/zoom/hover-trace controls into src/tui/app.ts, and added tests/v04-tui-graph.test.ts (merged on main at 404c910)."
 ---
 Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, click-and-drag panning, and dependency chain highlighting.
