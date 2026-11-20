@@ -136,14 +136,16 @@ Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repo
 
 ### Interactive Dependency Graph & Status Board Views (`dashboard-view-modes`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.1`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.1`
 
 Adds switchable Feature DAG dependency graph and Status Board views alongside the default Milestone Cards view in pp view.
 
-**Ship Criteria (0/3):**
-- [ ] Switches cleanly between Milestone Cards, interactive Feature DAG Graph, and Status Board views
-- [ ] Highlights upstream/downstream dependencies on hover or focus in Graph view
-- [ ] Shares active filters, search, and the feature detail drawer across all views
+**Ship Criteria (3/3):**
+- [x] Switches cleanly between Milestone Cards, interactive Feature DAG Graph, and Status Board views
+- [x] Highlights upstream/downstream dependencies on hover or focus in Graph view
+- [x] Shares active filters, search, and the feature detail drawer across all views
+
+> **Latest Pulse (2026-11-20T14:23:14.046Z):** Extracted src/dashboard-html.ts and createProjectSlot(), adding Milestone Cards, layered Dependency Graph with upstream/downstream highlight, and Status Board views.
 
 ### Roadmap Activity Digest & Release Changelog (`activity-digest-changelog`)
 

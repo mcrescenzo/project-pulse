@@ -155,4 +155,98 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await context.close();
     }
   });
+
+  test("switches between Cards, Dependency Graph, and Status Board views with shared filters and DAG highlight", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "View Modes App" });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Foundation", status: "active", order: 10 });
+    svc.addFeature({
+      id: "node-a",
+      title: "Base Store",
+      milestone: "v0.1",
+      status: "shipped",
+      area: "Core",
+    });
+    svc.addFeature({
+      id: "node-b",
+      title: "Query Engine",
+      milestone: "v0.1",
+      status: "in-progress",
+      area: "Core",
+      depends_on: ["node-a"],
+    });
+    svc.addFeature({
+      id: "node-c",
+      title: "Dashboard View",
+      milestone: "v0.1",
+      status: "planned",
+      area: "UI",
+      depends_on: ["node-b"],
+    });
+    svc.addFeature({
+      id: "node-d",
+      title: "Docs Polish",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Docs",
+    });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      const consoleErrors: string[] = [];
+      page.on("console", (m) => {
+        if (m.type() === "error") consoleErrors.push(m.text());
+      });
+
+      await page.goto(handle.url, { waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="node-a"]');
+
+      // Switch to Dependency Graph view
+      await page.locator("#tab-graph").click();
+      await page.waitForSelector('.graph-node[data-feature-id="node-b"]');
+
+      // Focusing middle node B highlights upstream A, downstream C, and dims unrelated D
+      await page.locator('.graph-node[data-feature-id="node-b"]').focus();
+      const highlightState = await page.evaluate(() => ({
+        a: document.querySelector('.graph-node[data-feature-id="node-a"]')?.className,
+        b: document.querySelector('.graph-node[data-feature-id="node-b"]')?.className,
+        c: document.querySelector('.graph-node[data-feature-id="node-c"]')?.className,
+        d: document.querySelector('.graph-node[data-feature-id="node-d"]')?.className,
+        edges: document.querySelectorAll(".graph-edge").length,
+      }));
+      expect(highlightState.edges).toBe(2);
+      expect(highlightState.a).toContain("is-upstream");
+      expect(highlightState.b).toContain("is-active");
+      expect(highlightState.c).toContain("is-downstream");
+      expect(highlightState.d).toContain("is-dimmed");
+
+      // Clicking node C opens drawer
+      await page.locator('.graph-node[data-feature-id="node-c"]').click();
+      await page.waitForSelector("#drawer-backdrop.open");
+      expect(await page.locator("#drawer-title").textContent()).toBe("Dashboard View");
+      await page.keyboard.press("Escape");
+
+      // Switch to Status Board view with active search filter shared across views
+      await page.locator("#filter-search").fill("Docs");
+      await page.locator("#tab-board").click();
+      await page.waitForSelector('.board-card[data-feature-id="node-d"]');
+      expect(await page.locator(".board-card").count()).toBe(1);
+
+      // Clear filter and press Enter on Status Board card opens drawer
+      await page.locator("#filter-reset").click();
+      expect(await page.locator(".board-card").count()).toBe(4);
+      await page.locator('.board-card[data-feature-id="node-a"]').focus();
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#drawer-backdrop.open");
+      expect(await page.locator("#drawer-title").textContent()).toBe("Base Store");
+
+      expect(consoleErrors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
 });
