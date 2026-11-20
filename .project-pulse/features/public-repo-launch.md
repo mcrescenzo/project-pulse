@@ -22,7 +22,7 @@ ship_criteria:
     done: true
   - id: bumps-to-0-5
     text: "Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5"
-    done: false
+    done: true
 updates:
   - at: 2026-11-20T21:26:29.312Z
     note: "Private repo mcrescenzo/project-pulse created with topics, wiki/projects off, squash/rebase merges, delete-branch-on-merge; fresh clone passes bun install, typecheck, 60/60 tests, and tokenized pp view (pp-4cq.5). Branch protection and private vulnerability reporting require the public flip."

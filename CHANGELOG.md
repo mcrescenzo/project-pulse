@@ -136,6 +136,7 @@ Security and privacy audit, open-source documentation and CI, and public GitHub 
   - [x] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
   - [x] Verifies clean fresh clone, test run, and pp view launch from the published repository
   - [x] Switches GitHub repository visibility to public with green CI on main
+  - [x] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
 
 ## v1.0 — NPM Package Distribution
 

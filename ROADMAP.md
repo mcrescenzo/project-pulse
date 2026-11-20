@@ -302,11 +302,11 @@ Adds open-source license, contribution and security policies, polished README wi
 
 Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
 
-**Ship Criteria (3/4):**
+**Ship Criteria (4/4):**
 - [x] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
 - [x] Verifies clean fresh clone, test run, and pp view launch from the published repository
 - [x] Switches GitHub repository visibility to public with green CI on main
-- [ ] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
+- [x] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
 
 > **Latest Pulse (2026-11-20T21:33:07.163Z):** Repository made public with green CI on main and PRs; main protected (required CI check, linear history, no force-push/deletion); private vulnerability reporting enabled; v0.5.0 tagged and released (pp-4cq.6).
 
