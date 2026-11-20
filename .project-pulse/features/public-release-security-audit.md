@@ -10,7 +10,8 @@ depends_on:
   - multi-project-hub
   - tui-interactive-drawer
 refs:
-  []
+  - bd:pp-4cq.1
+  - bd:pp-4cq.3
 ship_criteria:
   - id: audits-source-docs-and
     text: "Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions"
@@ -20,6 +21,12 @@ ship_criteria:
     done: false
   - id: documents-audit-checklist-result
     text: Documents audit checklist results and resolves all high/medium findings
+    done: false
+  - id: rewrites-git-history-to
+    text: Rewrites git history to the GitHub noreply identity and pins the repo-local author email
+    done: false
+  - id: hardens-view-and-hub
+    text: "Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers"
     done: false
 updates:
   []

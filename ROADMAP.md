@@ -231,7 +231,7 @@ Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, clic
 - [x] Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode
 - [x] Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle
 
-> **Latest Pulse (2026-11-20T16:36:37.804Z):** Implemented src/tui/graph.ts, integrated pan/zoom/hover-trace controls into src/tui/app.ts, and added tests/v04-tui-graph.test.ts (merged on main at 404c910).
+> **Latest Pulse (2026-11-20T21:11:45.884Z):** Hover now defaults to ON (commit 64445d2, 'default graph hover ON'); the original 'Hover OFF by default' criterion text is superseded.
 
 ### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
 
@@ -248,42 +248,59 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
-**Status:** `planned` | **Progress:** 0/3 features shipped
+**Status:** `active` | **Progress:** 0/4 features shipped
 
 Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
 
+### TypeScript Typecheck Baseline & Test Hygiene (`typecheck-baseline`)
+
+**Status:** `planned` | **Area:** Core | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-4cq.2`
+
+Installs TypeScript tooling, fixes all type errors, and deflakes timing-sensitive tests so CI can enforce typechecks.
+
+**Ship Criteria (0/3):**
+- [ ] Adds typescript and @types/bun dev dependencies matching Bun 1.3 plus a typecheck script
+- [ ] tsc --noEmit passes with zero errors across src and tests
+- [ ] Replaces fixed-sleep and silent-skip tests with deterministic polling or visible skips
+
 ### Public Release Security & Privacy Audit (`public-release-security-audit`)
 
-**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`, `tui-interactive-drawer`
+**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`, `tui-interactive-drawer` | **Refs:** `bd:pp-4cq.1`, `bd:pp-4cq.3`
 
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.
 
-**Ship Criteria (0/3):**
+**Ship Criteria (0/5):**
 - [ ] Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions
 - [ ] Verifies XSS, CSRF, path-traversal, and subprocess argument safety across CLI, MCP, and local hub server
 - [ ] Documents audit checklist results and resolves all high/medium findings
+- [ ] Rewrites git history to the GitHub noreply identity and pins the repo-local author email
+- [ ] Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers
 
 ### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
 
-**Status:** `planned` | **Area:** Docs | **Depends on:** `public-release-security-audit`
+**Status:** `planned` | **Area:** Docs | **Depends on:** `public-release-security-audit`, `typecheck-baseline` | **Refs:** `bd:pp-4cq.4`
 
 Adds open-source license, contribution and security policies, polished README with screenshots, and automated GitHub Actions CI.
 
-**Ship Criteria (0/3):**
+**Ship Criteria (0/6):**
 - [ ] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
 - [ ] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
 - [ ] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
+- [ ] Completes package.json public metadata (license, repository, homepage, bugs, engines, keywords)
+- [ ] Replaces stale SPEC.md with docs/architecture.md and generalizes AGENTS.md for contributors
+- [ ] Generates CHANGELOG.md via pp changelog --all
 
 ### Public GitHub Repository Launch (`public-repo-launch`)
 
-**Status:** `planned` | **Area:** Release | **Depends on:** `oss-docs-and-ci`
+**Status:** `planned` | **Area:** Release | **Depends on:** `oss-docs-and-ci` | **Refs:** `bd:pp-4cq.5`, `bd:pp-4cq.6`
 
 Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
 
-**Ship Criteria (0/3):**
+**Ship Criteria (0/4):**
 - [ ] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
 - [ ] Verifies clean fresh clone, test run, and pp view launch from the published repository
 - [ ] Switches GitHub repository visibility to public with green CI on main
+- [ ] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
 
 ## v1.0 — NPM Package Distribution (`v1.0`)
 
