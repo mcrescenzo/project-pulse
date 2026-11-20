@@ -24,11 +24,12 @@ ship_criteria:
     done: false
   - id: rewrites-git-history-to
     text: Rewrites git history to the GitHub noreply identity and pins the repo-local author email
-    done: false
+    done: true
   - id: hardens-view-and-hub
     text: "Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers"
     done: false
 updates:
-  []
+  - at: 2026-11-20T21:12:38.831Z
+    note: "History rewritten with git-filter-repo mailmap: all 44 commits now authored as the GitHub noreply identity; repo-local user.email pinned; pre-rewrite mirror kept locally outside the repo (pp-4cq.1)."
 ---
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.

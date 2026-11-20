@@ -23,5 +23,7 @@ ship_criteria:
 updates:
   - at: 2026-11-20T16:32:01.642Z
     note: "Implemented src/tui/screen.ts, src/tui/input.ts, src/tui/app.ts stub, pp view --tui [--no-beads] CLI validation, and tests/v04-tui-core.test.ts (merged on main at 5c0bc66)."
+  - at: 2026-11-20T21:12:27.246Z
+    note: "Commit refs remapped after v0.5 history rewrite: 5c0bc66 → efb1de9."
 ---
 Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer, OSC 52 copy, and pp view --tui CLI wiring.

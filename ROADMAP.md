@@ -205,7 +205,7 @@ Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer,
 - [x] Stateful keyboard and SGR mouse input decoder with z-indexed hit-test regions, OSC 52 copy, and guaranteed raw-mode/alt-screen teardown
 - [x] Explicit pp view --tui [--no-beads] CLI wiring rejecting non-TTY sessions and incompatible HTTP flags
 
-> **Latest Pulse (2026-11-20T16:32:01.642Z):** Implemented src/tui/screen.ts, src/tui/input.ts, src/tui/app.ts stub, pp view --tui [--no-beads] CLI validation, and tests/v04-tui-core.test.ts (merged on main at 5c0bc66).
+> **Latest Pulse (2026-11-20T21:12:27.246Z):** Commit refs remapped after v0.5 history rewrite: 5c0bc66 → efb1de9.
 
 ### TUI Views, Filters & Health Diagnostics (`tui-views-and-filters`)
 
@@ -218,7 +218,7 @@ Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, r
 - [x] Responsive 1-3 column Milestone Cards view hiding empty milestones when filtering and Status Board columns with keyboard and wheel scrolling
 - [x] Virtual screen-buffer test suite covering filters, view switching, scrolling, and health diagnostics
 
-> **Latest Pulse (2026-11-20T16:34:19.503Z):** Implemented src/tui/views.ts, full TuiController in src/tui/app.ts, and tests/v04-tui-views.test.ts covering KPIs, floating pickers, live search, empty-milestone filter hiding, Status Board, and Health diagnostics (merged on main at a11791d).
+> **Latest Pulse (2026-11-20T21:12:27.294Z):** Commit refs remapped after v0.5 history rewrite: a11791d → 87df926.
 
 ### TUI Waterfall Dependency Graph (`tui-waterfall-graph`)
 
@@ -231,7 +231,7 @@ Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, clic
 - [x] Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode
 - [x] Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle
 
-> **Latest Pulse (2026-11-20T21:11:45.884Z):** Hover now defaults to ON (commit 64445d2, 'default graph hover ON'); the original 'Hover OFF by default' criterion text is superseded.
+> **Latest Pulse (2026-11-20T21:12:27.331Z):** Commit refs remapped after v0.5 history rewrite: 404c910 → 78d85ca, 64445d2 → abc4bf4.
 
 ### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
 
@@ -244,7 +244,7 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 - [x] Instant first paint from disk with non-blocking async Beads refresh, debounced fs.watch live reload, m mouse toggle, y OSC 52 copy, and ? help overlay
 - [x] End-to-end virtual-buffer interaction tests and real headless PTY smoke test verifying alt-screen entry and clean exit restoration
 
-> **Latest Pulse (2026-11-20T16:39:35.959Z):** Implemented src/tui/drawer.ts, integrated split/modal drawer quick-actions, debounced fs.watch reload, async Beads refresh, m/y/? shortcuts, and virtual-buffer + real PTY smoke tests in tests/v04-tui-drawer-pty.test.ts (merged on main at ce0c8a8).
+> **Latest Pulse (2026-11-20T21:12:27.364Z):** Commit refs remapped after v0.5 history rewrite: ce0c8a8 → 3d830fb.
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
@@ -269,12 +269,14 @@ Installs TypeScript tooling, fixes all type errors, and deflakes timing-sensitiv
 
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.
 
-**Ship Criteria (0/5):**
+**Ship Criteria (1/5):**
 - [ ] Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions
 - [ ] Verifies XSS, CSRF, path-traversal, and subprocess argument safety across CLI, MCP, and local hub server
 - [ ] Documents audit checklist results and resolves all high/medium findings
-- [ ] Rewrites git history to the GitHub noreply identity and pins the repo-local author email
+- [x] Rewrites git history to the GitHub noreply identity and pins the repo-local author email
 - [ ] Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers
+
+> **Latest Pulse (2026-11-20T21:12:38.831Z):** History rewritten with git-filter-repo mailmap: all 44 commits now authored as the GitHub noreply identity; repo-local user.email pinned; pre-rewrite mirror kept locally outside the repo (pp-4cq.1).
 
 ### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
 

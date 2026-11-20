@@ -22,5 +22,7 @@ ship_criteria:
 updates:
   - at: 2026-11-20T16:34:19.503Z
     note: "Implemented src/tui/views.ts, full TuiController in src/tui/app.ts, and tests/v04-tui-views.test.ts covering KPIs, floating pickers, live search, empty-milestone filter hiding, Status Board, and Health diagnostics (merged on main at a11791d)."
+  - at: 2026-11-20T21:12:27.294Z
+    note: "Commit refs remapped after v0.5 history rewrite: a11791d → 87df926."
 ---
 Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, responsive Milestone Cards, and Status Board columns.

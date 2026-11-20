@@ -23,5 +23,7 @@ ship_criteria:
 updates:
   - at: 2026-11-20T16:39:35.959Z
     note: "Implemented src/tui/drawer.ts, integrated split/modal drawer quick-actions, debounced fs.watch reload, async Beads refresh, m/y/? shortcuts, and virtual-buffer + real PTY smoke tests in tests/v04-tui-drawer-pty.test.ts (merged on main at ce0c8a8)."
+  - at: 2026-11-20T21:12:27.364Z
+    note: "Commit refs remapped after v0.5 history rewrite: ce0c8a8 → 3d830fb."
 ---
 Responsive split/modal Feature Detail Drawer with criteria/status/note persistence, debounced fs.watch reload, async Beads refresh, and PTY smoke test.

@@ -25,5 +25,7 @@ updates:
     note: "Implemented src/tui/graph.ts, integrated pan/zoom/hover-trace controls into src/tui/app.ts, and added tests/v04-tui-graph.test.ts (merged on main at 404c910)."
   - at: 2026-11-20T21:11:45.884Z
     note: "Hover now defaults to ON (commit 64445d2, 'default graph hover ON'); the original 'Hover OFF by default' criterion text is superseded."
+  - at: 2026-11-20T21:12:27.331Z
+    note: "Commit refs remapped after v0.5 history rewrite: 404c910 → 78d85ca, 64445d2 → abc4bf4."
 ---
 Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, click-and-drag panning, and dependency chain highlighting.
