@@ -5,11 +5,11 @@ milestone: v0.3
 order: 10
 status: planned
 area: UI
-depends_on: 
+depends_on:
   - dashboard-polish-security
-refs: 
-  []
-ship_criteria: 
+refs:
+  - bd:pp-rrp.2
+ship_criteria:
   - id: running-pp-view-in
     text: Running pp view in multiple repos auto-registers each repo on one hub port under /p/<slug> with isolated file watchers and SSE streams
     done: false
@@ -19,7 +19,7 @@ ship_criteria:
   - id: supports-standalone-fallback-to
     text: Supports --standalone fallback to run an isolated single-repo server
     done: false
-updates: 
+updates:
   []
 ---
 Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repositories each get their own /p/<slug> URL, watcher, and project switcher.

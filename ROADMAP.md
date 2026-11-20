@@ -119,13 +119,13 @@ Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
-**Status:** `planned` | **Progress:** 0/5 features shipped
+**Status:** `active` | **Progress:** 0/5 features shipped
 
 Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
 
 ### Auto-Joining Multi-Project Local Hub (`multi-project-hub`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.2`
 
 Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repositories each get their own /p/<slug> URL, watcher, and project switcher.
 
@@ -136,7 +136,7 @@ Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repo
 
 ### Interactive Dependency Graph & Status Board Views (`dashboard-view-modes`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.1`
 
 Adds switchable Feature DAG dependency graph and Status Board views alongside the default Milestone Cards view in pp view.
 
@@ -147,7 +147,7 @@ Adds switchable Feature DAG dependency graph and Status Board views alongside th
 
 ### Roadmap Activity Digest & Release Changelog (`activity-digest-changelog`)
 
-**Status:** `planned` | **Area:** CLI | **Depends on:** `cli-core-hardening`
+**Status:** `planned` | **Area:** CLI | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-rrp.4`
 
 Compiles concise progress digests and release notes from roadmap updates, shipped features, and git history since a date, tag, or milestone.
 
@@ -158,7 +158,7 @@ Compiles concise progress digests and release notes from roadmap updates, shippe
 
 ### One-Command Agent Onboarding & Repo Setup (`agent-repo-setup`)
 
-**Status:** `planned` | **Area:** Agent | **Depends on:** `mcp-server`, `cli-core-hardening`
+**Status:** `planned` | **Area:** Agent | **Depends on:** `mcp-server`, `cli-core-hardening` | **Refs:** `bd:pp-rrp.5`
 
 Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server config into any repository idempotently.
 
@@ -169,7 +169,7 @@ Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server 
 
 ### Self-Contained Static HTML Export (`static-html-export`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security` | **Refs:** `bd:pp-rrp.3`
 
 Generates a single self-contained offline HTML roadmap snapshot from .project-pulse/ for sharing without a local server.
 

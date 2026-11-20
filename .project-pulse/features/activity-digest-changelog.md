@@ -5,11 +5,11 @@ milestone: v0.3
 order: 30
 status: planned
 area: CLI
-depends_on: 
+depends_on:
   - cli-core-hardening
-refs: 
-  []
-ship_criteria: 
+refs:
+  - bd:pp-rrp.4
+ship_criteria:
   - id: pp-digest-summarizes-shipped
     text: "pp digest summarizes shipped features, status movement, completed criteria, and notes since a date or git ref"
     done: false
@@ -19,7 +19,7 @@ ship_criteria:
   - id: works-gracefully-in-repos
     text: Works gracefully in repos with minimal or unannotated git history
     done: false
-updates: 
+updates:
   []
 ---
 Compiles concise progress digests and release notes from roadmap updates, shipped features, and git history since a date, tag, or milestone.

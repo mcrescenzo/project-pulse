@@ -5,11 +5,11 @@ milestone: v0.3
 order: 20
 status: planned
 area: UI
-depends_on: 
+depends_on:
   - dashboard-polish-security
-refs: 
-  []
-ship_criteria: 
+refs:
+  - bd:pp-rrp.1
+ship_criteria:
   - id: switches-cleanly-between-milesto
     text: "Switches cleanly between Milestone Cards, interactive Feature DAG Graph, and Status Board views"
     done: false
@@ -19,7 +19,7 @@ ship_criteria:
   - id: shares-active-filters-search
     text: "Shares active filters, search, and the feature detail drawer across all views"
     done: false
-updates: 
+updates:
   []
 ---
 Adds switchable Feature DAG dependency graph and Status Board views alongside the default Milestone Cards view in pp view.
