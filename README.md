@@ -30,16 +30,21 @@ pp feature add offline-sync --title "Offline-First Sync" --milestone v0.1 --area
 
 | Command | Description |
 | :--- | :--- |
+| `pp` | Run `summary` if initialized, otherwise show help. |
 | `pp init [--name <name>] [--agents-snippet]` | Scaffold `.project-pulse/`, generate `ROADMAP.md`, and optionally print `AGENTS.md` guidance. |
+| `pp setup [--mcp <path>] [--with-skill] [--dry-run]` | Idempotently wire `AGENTS.md` instructions, MCP server config, and optional `SKILL.md` template. |
 | `pp summary [--milestone <id>] [--status <s>] [--json]` | Token-lean overview of milestones, features, criteria progress, and latest pulse notes. |
-| `pp show <feature-id> [--beads] [--json]` | Inspect one feature's description, criteria, dependencies, update log, and linked `bd:*` issues. |
-| `pp milestone add\|update <id> ...` | Create or update a release milestone and regenerate `ROADMAP.md`. |
-| `pp feature add\|update <id> ...` | Create or update a feature and regenerate `ROADMAP.md`. |
+| `pp show <feature-id> [--beads \| --no-beads] [--json]` | Inspect one feature's description, criteria, dependencies, update log, and linked `bd:*` issues. |
+| `pp milestone add\|update\|remove <id> ...` | Create, update, or remove (with `--reassign`) a release milestone and regenerate `ROADMAP.md`. |
+| `pp feature add\|update\|remove <id> ...` | Create, update (`--add-criterion` / `--remove-criterion`), or remove (`--force`) a feature and regenerate `ROADMAP.md`. |
 | `pp feature check <feature-id> <criterion> [--done\|--undone]` | Toggle or set a ship criterion checkbox and regenerate `ROADMAP.md`. |
 | `pp feature note <feature-id> "<message>"` | Append a timestamped pulse update and regenerate `ROADMAP.md`. |
+| `pp digest [--since <date\|7d\|git-ref>] [--milestone <id>]` | Compile recent progress across shipped features, status movement, criteria, and notes. |
+| `pp changelog [<milestone-id>] [--all] [--json]` | Generate Markdown release notes for a milestone or the entire roadmap. |
+| `pp export --html [--out <path\|->] [--beads]` | Write a deterministic, zero-network standalone HTML roadmap snapshot. |
 | `pp check [--beads] [--json]` | Validate schema integrity, dependency DAG, `ROADMAP.md` sync, and optional Beads drift. |
 | `pp render` | Deterministically recompile `.project-pulse/` into `ROADMAP.md`. |
-| `pp view [--port <n>] [--no-open]` | Launch the live-reloading local browser roadmap dashboard. |
+| `pp view [--port <n>] [--standalone] [--no-open]` | Start or join the auto-joining multi-project local hub (`/`, `/p/<slug>`), or run an isolated standalone server. |
 | `pp mcp` | Start the stdio Model Context Protocol (MCP) server. |
 
 ## MCP Server Configuration

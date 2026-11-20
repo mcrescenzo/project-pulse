@@ -119,7 +119,7 @@ Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
-**Status:** `active` | **Progress:** 5/5 features shipped
+**Status:** `shipped` | **Progress:** 5/5 features shipped
 
 Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
 

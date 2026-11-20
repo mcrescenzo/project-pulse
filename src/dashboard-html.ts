@@ -530,7 +530,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       transition: stroke 0.14s ease, opacity 0.14s ease, stroke-width 0.14s ease;
     }
     .graph-edge.is-upstream { stroke: var(--amber); stroke-width: 2.6; opacity: 1; }
-    .graph-edge.is-downstream { stroke: var(--accent); stroke-width: 2.6; opacity: 1; }
+    .graph-edge.is-downstream { stroke: var(--green); stroke-width: 2.6; opacity: 1; }
     .graph-edge.is-dimmed { opacity: 0.18; }
     .graph-node {
       position: absolute;
@@ -1711,6 +1711,8 @@ export function buildPortfolioHtml(): string {
       border-radius: 999px;
       font-size: 0.78rem;
       font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .pill-live { background: var(--green-soft); color: var(--green); }
     .pill-live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
@@ -1741,6 +1743,7 @@ export function buildPortfolioHtml(): string {
       gap: 12px;
     }
     .project-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .project-top > div { min-width: 0; }
     .project-title { font-size: 1.15rem; font-weight: 700; margin: 0; }
     .project-path {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
