@@ -190,7 +190,7 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 ## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
 
-**Status:** `active` | **Progress:** 1/4 features shipped
+**Status:** `active` | **Progress:** 2/4 features shipped
 
 Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
 
@@ -209,14 +209,16 @@ Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer,
 
 ### TUI Views, Filters & Health Diagnostics (`tui-views-and-filters`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-core-engine` | **Refs:** `bd:pp-02n.2`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `tui-core-engine` | **Refs:** `bd:pp-02n.2`
 
 Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, responsive Milestone Cards, and Status Board columns.
 
-**Ship Criteria (0/3):**
-- [ ] Header, KPI strip, clickable Health & Drift overlay with jump-to-feature, and shared view/filter bar with floating pickers and / search
-- [ ] Responsive 1-3 column Milestone Cards view hiding empty milestones when filtering and Status Board columns with keyboard and wheel scrolling
-- [ ] Virtual screen-buffer test suite covering filters, view switching, scrolling, and health diagnostics
+**Ship Criteria (3/3):**
+- [x] Header, KPI strip, clickable Health & Drift overlay with jump-to-feature, and shared view/filter bar with floating pickers and / search
+- [x] Responsive 1-3 column Milestone Cards view hiding empty milestones when filtering and Status Board columns with keyboard and wheel scrolling
+- [x] Virtual screen-buffer test suite covering filters, view switching, scrolling, and health diagnostics
+
+> **Latest Pulse (2026-11-20T16:34:19.503Z):** Implemented src/tui/views.ts, full TuiController in src/tui/app.ts, and tests/v04-tui-views.test.ts covering KPIs, floating pickers, live search, empty-milestone filter hiding, Status Board, and Health diagnostics (merged on main at a11791d).
 
 ### TUI Waterfall Dependency Graph (`tui-waterfall-graph`)
 
