@@ -70,26 +70,182 @@ Localhost web viewer powered by Bun.serve with file-watch live reload.
 
 > **Latest Pulse (2026-11-20T04:52:42.468Z):** Bun.serve dashboard with SSE live-reload and drawer quick-actions shipped on main.
 
-## v0.2 — Ecosystem & Polish (`v0.2`)
+## v0.2 — Hardening & UX Polish (`v0.2`)
 
-**Status:** `planned` | **Target:** 2027-Q1 | **Progress:** 0/2 features shipped
+**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 0/3 features shipped
 
-Follow-on ergonomics, static HTML export, and additional read-only tracker adapters.
+Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhost CSRF protection, dashboard accessibility, and Playwright regression tests.
 
-### Self-Contained Static HTML Export (`static-html-export`)
+### CLI Ergonomics & Core Store Hardening (`cli-core-hardening`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `local-browser-view`
+**Status:** `planned` | **Area:** CLI | **Depends on:** `authoring-cli`
 
-Generates a zero-server static HTML bundle from .project-pulse/.
+Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria edits, default summary, remove commands, clean YAML, and resilient checks.
 
-**Ship Criteria (0/1):**
-- [ ] Exports a single standalone HTML roadmap snapshot for offline sharing
+**Ship Criteria (0/4):**
+- [ ] Discovers .project-pulse/ upward from any nested subdirectory
+- [ ] Rejects unknown CLI flags with clear errors instead of swallowing them
+- [ ] Supports --add-criterion, --remove-criterion, feature/milestone remove, bare pp summary, and --no-beads
+- [ ] Emits whitespace-clean YAML, handles malformed config.yaml in pp check, and deduplicates self-dependency cycle errors
 
-### Read-Only GitHub Issues & Milestones Adapter (`github-tracker-adapter`)
+### Batched & Cached Beads Resolution (`beads-resolution-perf`)
 
 **Status:** `planned` | **Area:** Integrations | **Depends on:** `orientation-and-beads`
 
-Optional read-only GitHub ref resolution alongside Beads.
+Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invocation caching across CLI and dashboard endpoints.
 
-**Ship Criteria (0/1):**
-- [ ] Resolves gh:#N refs via gh CLI with drift checks
+**Ship Criteria (0/3):**
+- [ ] Resolves multiple unique Beads refs via batched lookup with per-invocation cache
+- [ ] Speeds up pp check --beads, pp show, and /api/roadmap without stale cross-run cache state
+- [ ] Covers multi-ref caching and partial missing-id behavior in unit tests
+
+### Dashboard Security, Accessibility & Visual Polish (`dashboard-polish-security`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `local-browser-view`
+
+Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/ARIA accessible, preserves drafts across SSE reloads, and polishes visual hierarchy.
+
+**Ship Criteria (0/4):**
+- [ ] Enforces localhost Origin/Host and application/json checks on POST /api/features/:id/pulse
+- [ ] Provides keyboard-accessible cards, ARIA dialog drawer with Escape-to-close, labeled filters, and inline saving feedback
+- [ ] Preserves unsaved drawer drafts across SSE reloads and adds clickable health/drift popover and light/dark theme toggle
+- [ ] Shows 1-line card descriptions with reduced tag noise, serves inline favicon, fixes mobile KPI grid, and adds Playwright UI regression tests
+
+## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
+
+**Status:** `planned` | **Progress:** 0/5 features shipped
+
+Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
+
+### Auto-Joining Multi-Project Local Hub (`multi-project-hub`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+
+Lets pp view start or join a shared local hub on 127.0.0.1:4310 so parallel repositories each get their own /p/<slug> URL, watcher, and project switcher.
+
+**Ship Criteria (0/3):**
+- [ ] Running pp view in multiple repos auto-registers each repo on one hub port under /p/<slug> with isolated file watchers and SSE streams
+- [ ] Includes a header project switcher, a / portfolio overview page, and stale-path cleanup
+- [ ] Supports --standalone fallback to run an isolated single-repo server
+
+### Interactive Dependency Graph & Status Board Views (`dashboard-view-modes`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+
+Adds switchable Feature DAG dependency graph and Status Board views alongside the default Milestone Cards view in pp view.
+
+**Ship Criteria (0/3):**
+- [ ] Switches cleanly between Milestone Cards, interactive Feature DAG Graph, and Status Board views
+- [ ] Highlights upstream/downstream dependencies on hover or focus in Graph view
+- [ ] Shares active filters, search, and the feature detail drawer across all views
+
+### Roadmap Activity Digest & Release Changelog (`activity-digest-changelog`)
+
+**Status:** `planned` | **Area:** CLI | **Depends on:** `cli-core-hardening`
+
+Compiles concise progress digests and release notes from roadmap updates, shipped features, and git history since a date, tag, or milestone.
+
+**Ship Criteria (0/3):**
+- [ ] pp digest summarizes shipped features, status movement, completed criteria, and notes since a date or git ref
+- [ ] pp changelog generates clean Markdown release notes for a milestone with --json support
+- [ ] Works gracefully in repos with minimal or unannotated git history
+
+### One-Command Agent Onboarding & Repo Setup (`agent-repo-setup`)
+
+**Status:** `planned` | **Area:** Agent | **Depends on:** `mcp-server`, `cli-core-hardening`
+
+Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server config into any repository idempotently.
+
+**Ship Criteria (0/3):**
+- [ ] pp setup initializes or updates AGENTS.md roadmap instructions without clobbering user content
+- [ ] Installs or prints ready-to-use MCP client config and optional agent skill templates
+- [ ] Supports --dry-run and idempotent re-runs verified by automated tests
+
+### Self-Contained Static HTML Export (`static-html-export`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`
+
+Generates a single self-contained offline HTML roadmap snapshot from .project-pulse/ for sharing without a local server.
+
+**Ship Criteria (0/3):**
+- [ ] pp export --html writes a single standalone HTML file with zero external network dependencies
+- [ ] Preserves milestone grouping, filters, search, theme toggle, and read-only detail drawer offline
+- [ ] Supports --out <path> and deterministic output verified by tests
+
+## v0.4 — Open-Source Public Release (`v0.4`)
+
+**Status:** `planned` | **Progress:** 0/3 features shipped
+
+Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
+
+### Public Release Security & Privacy Audit (`public-release-security-audit`)
+
+**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`
+
+Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.
+
+**Ship Criteria (0/3):**
+- [ ] Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions
+- [ ] Verifies XSS, CSRF, path-traversal, and subprocess argument safety across CLI, MCP, and local hub server
+- [ ] Documents audit checklist results and resolves all high/medium findings
+
+### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
+
+**Status:** `planned` | **Area:** Docs | **Depends on:** `public-release-security-audit`
+
+Adds open-source license, contribution and security policies, polished README with screenshots, and automated GitHub Actions CI.
+
+**Ship Criteria (0/3):**
+- [ ] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
+- [ ] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
+- [ ] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
+
+### Public GitHub Repository Launch (`public-repo-launch`)
+
+**Status:** `planned` | **Area:** Release | **Depends on:** `oss-docs-and-ci`
+
+Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
+
+**Ship Criteria (0/3):**
+- [ ] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
+- [ ] Verifies clean fresh clone, test run, and pp view launch from the published repository
+- [ ] Switches GitHub repository visibility to public with green CI on main
+
+## v1.0 — NPM Package Distribution (`v1.0`)
+
+**Status:** `planned` | **Progress:** 0/3 features shipped
+
+Node.js 20+ runtime portability, bundled CLI packaging, and public npm release for single-command installation.
+
+### Node.js 20+ & Bun Dual-Runtime Portability (`node-runtime-portability`)
+
+**Status:** `planned` | **Area:** Core | **Depends on:** `cli-core-hardening`, `multi-project-hub`
+
+Replaces Bun-only runtime calls (Bun.YAML, Bun.serve, Bun.spawn/stdin) with portable Node.js 20+ APIs and a lightweight YAML library while retaining full Bun support.
+
+**Ship Criteria (0/3):**
+- [ ] Replaces Bun.YAML, Bun.serve, and Bun.spawn/Bun.stdin with portable Node.js 20+ APIs and a lightweight YAML parser
+- [ ] Passes full CLI, MCP, hub server, and Beads test suites under both Node.js 20+ and Bun
+- [ ] Preserves fast startup and clean zero-bloat dependency footprint
+
+### NPM Package Build & Clean-Install Verification (`npm-package-build`)
+
+**Status:** `planned` | **Area:** Release | **Depends on:** `node-runtime-portability`
+
+Produces a clean bundled dist/cli.js package with Node shebang and verifies local npm pack installs across Node.js and Bun.
+
+**Ship Criteria (0/3):**
+- [ ] Builds dist/cli.js with #!/usr/bin/env node and clean package.json bin, files, and engines fields
+- [ ] Verifies npm pack tarball contents exclude repo-only scratch/test artifacts
+- [ ] Passes clean-environment smoke tests for npx, npm i -g, and bunx installs
+
+### Public NPM Registry Publish & Release Automation (`npm-registry-publish`)
+
+**Status:** `planned` | **Area:** Release | **Depends on:** `npm-package-build`, `public-repo-launch`
+
+Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
+
+**Ship Criteria (0/3):**
+- [ ] Confirms npm package name availability and configures tag-driven publish workflow with npm provenance
+- [ ] Publishes v1.0 release to npmjs.com linked to the public GitHub repository
+- [ ] Verifies single-command npx project-pulse and npm i -g project-pulse on fresh Node.js and Bun environments
