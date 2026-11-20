@@ -190,7 +190,7 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 ## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
 
-**Status:** `active` | **Progress:** 3/4 features shipped
+**Status:** `active` | **Progress:** 4/4 features shipped
 
 Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
 
@@ -235,14 +235,16 @@ Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, clic
 
 ### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
 
-**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-views-and-filters`, `tui-waterfall-graph` | **Refs:** `bd:pp-02n.4`
+**Status:** `shipped` | **Area:** UI | **Depends on:** `tui-views-and-filters`, `tui-waterfall-graph` | **Refs:** `bd:pp-02n.4`
 
 Responsive split/modal Feature Detail Drawer with criteria/status/note persistence, debounced fs.watch reload, async Beads refresh, and PTY smoke test.
 
-**Ship Criteria (0/3):**
-- [ ] Responsive split-pane (>= 120 cols) and full-height modal (< 120 cols) Feature Detail Drawer with status pills, criteria toggles, Depends On jumps, and draft-preserving pulse notes
-- [ ] Instant first paint from disk with non-blocking async Beads refresh, debounced fs.watch live reload, m mouse toggle, y OSC 52 copy, and ? help overlay
-- [ ] End-to-end virtual-buffer interaction tests and real headless PTY smoke test verifying alt-screen entry and clean exit restoration
+**Ship Criteria (3/3):**
+- [x] Responsive split-pane (>= 120 cols) and full-height modal (< 120 cols) Feature Detail Drawer with status pills, criteria toggles, Depends On jumps, and draft-preserving pulse notes
+- [x] Instant first paint from disk with non-blocking async Beads refresh, debounced fs.watch live reload, m mouse toggle, y OSC 52 copy, and ? help overlay
+- [x] End-to-end virtual-buffer interaction tests and real headless PTY smoke test verifying alt-screen entry and clean exit restoration
+
+> **Latest Pulse (2026-11-20T16:39:35.959Z):** Implemented src/tui/drawer.ts, integrated split/modal drawer quick-actions, debounced fs.watch reload, async Beads refresh, m/y/? shortcuts, and virtual-buffer + real PTY smoke tests in tests/v04-tui-drawer-pty.test.ts (merged on main at ce0c8a8).
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
