@@ -6,6 +6,7 @@ import { buildChangelog, buildDigest } from "./digest";
 import { exportStaticHtml } from "./export";
 import { joinOrStartHub } from "./hub";
 import { runMcpServer } from "./mcp";
+import { runRepoSetup } from "./setup";
 import {
   findProjectRoot,
   formatFeatureText,
@@ -44,6 +45,9 @@ const VALUE_FLAGS = new Set([
   "port",
   "out",
   "since",
+  "agents-md",
+  "mcp",
+  "skill",
 ]);
 
 const BOOLEAN_FLAGS = new Set([
@@ -60,6 +64,9 @@ const BOOLEAN_FLAGS = new Set([
   "force",
   "html",
   "all",
+  "with-skill",
+  "init",
+  "dry-run",
 ]);
 
 const GLOBAL_VALUE_FLAGS = new Set(["root"]);
@@ -111,6 +118,7 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   export: { value: ["out"], boolean: ["html", "beads"] },
   digest: { value: ["since", "milestone"], boolean: [] },
   changelog: { value: [], boolean: ["all"] },
+  setup: { value: ["agents-md", "mcp", "skill"], boolean: ["with-skill", "init", "dry-run"] },
   mcp: { value: [], boolean: [] },
 };
 
@@ -253,6 +261,7 @@ Usage:
   pp export --html [--out <path|->] [--beads] [--json]
   pp digest [--since <date|7d|git-ref>] [--milestone <id>] [--json]
   pp changelog [<milestone-id>] [--all] [--json]
+  pp setup [--agents-md <path>] [--mcp <path>] [--skill <path>] [--with-skill] [--init] [--dry-run] [--json]
   pp mcp
   pp --help | --version
 
@@ -779,6 +788,38 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           console.log(JSON.stringify(result, null, 2));
         } else {
           process.stdout.write(result.markdown);
+        }
+        return 0;
+      }
+
+      case "setup": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'setup'`);
+        }
+        const rawAgents = getFlag(parsed, "agents-md");
+        const rawMcp = getFlag(parsed, "mcp");
+        const rawSkill = getFlag(parsed, "skill");
+        const result = runRepoSetup(rootDir, {
+          agentsMdPath: rawAgents ? resolve(cwd, rawAgents) : undefined,
+          mcpPath: rawMcp ? resolve(cwd, rawMcp) : undefined,
+          skillPath: rawSkill ? resolve(cwd, rawSkill) : undefined,
+          withSkill: parsed.booleans.has("with-skill"),
+          init: parsed.booleans.has("init"),
+          dryRun: parsed.booleans.has("dry-run"),
+        });
+        if (jsonMode) {
+          console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+        } else {
+          if (result.dryRun) {
+            console.log("Dry-run mode — no files were modified:");
+          }
+          for (const item of result.actions) {
+            console.log(`[${item.action}] ${item.path} — ${item.detail}`);
+          }
+          if (!rawMcp) {
+            console.log("\nMCP server config snippet (pass --mcp <path> to write automatically):");
+            console.log(JSON.stringify(result.mcpConfig, null, 2));
+          }
         }
         return 0;
       }
