@@ -248,7 +248,7 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
-**Status:** `active` | **Progress:** 1/4 features shipped
+**Status:** `active` | **Progress:** 2/4 features shipped
 
 Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
 
@@ -267,18 +267,18 @@ Installs TypeScript tooling, fixes all type errors, and deflakes timing-sensitiv
 
 ### Public Release Security & Privacy Audit (`public-release-security-audit`)
 
-**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`, `tui-interactive-drawer` | **Refs:** `bd:pp-4cq.1`, `bd:pp-4cq.3`
+**Status:** `shipped` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`, `tui-interactive-drawer` | **Refs:** `bd:pp-4cq.1`, `bd:pp-4cq.3`
 
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.
 
-**Ship Criteria (1/5):**
-- [ ] Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions
-- [ ] Verifies XSS, CSRF, path-traversal, and subprocess argument safety across CLI, MCP, and local hub server
-- [ ] Documents audit checklist results and resolves all high/medium findings
+**Ship Criteria (5/5):**
+- [x] Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions
+- [x] Verifies XSS, CSRF, path-traversal, and subprocess argument safety across CLI, MCP, and local hub server
+- [x] Documents audit checklist results and resolves all high/medium findings
 - [x] Rewrites git history to the GitHub noreply identity and pins the repo-local author email
-- [ ] Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers
+- [x] Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers
 
-> **Latest Pulse (2026-11-20T21:12:38.831Z):** History rewritten with git-filter-repo mailmap: all 44 commits now authored as the GitHub noreply identity; repo-local user.email pinned; pre-rewrite mirror kept locally outside the repo (pp-4cq.1).
+> **Latest Pulse (2026-11-20T21:21:27.884Z):** Audit complete (docs/security-audit.md): gitleaks clean on tree + 47-commit history; fixed H1 DNS rebinding, M1 access-token auth, M2 anti-framing headers, M3 opener/joined URL, M4 symlink/mode-preserving writes, M5 init overwrite guard, and L1-L6/L8/L10; L7/L9/L11 accepted and documented. 60 tests pass (pp-4cq.3).
 
 ### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
 
