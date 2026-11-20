@@ -11,6 +11,11 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # @types/bun must match the minimum supported Bun runtime (engines.bun / CI bun-version).
+      # Raise all three together deliberately; only accept patch updates automatically.
+      - dependency-name: "@types/bun"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
