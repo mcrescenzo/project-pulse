@@ -248,20 +248,22 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
-**Status:** `active` | **Progress:** 0/4 features shipped
+**Status:** `active` | **Progress:** 1/4 features shipped
 
 Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
 
 ### TypeScript Typecheck Baseline & Test Hygiene (`typecheck-baseline`)
 
-**Status:** `planned` | **Area:** Core | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-4cq.2`
+**Status:** `shipped` | **Area:** Core | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-4cq.2`
 
 Installs TypeScript tooling, fixes all type errors, and deflakes timing-sensitive tests so CI can enforce typechecks.
 
-**Ship Criteria (0/3):**
-- [ ] Adds typescript and @types/bun dev dependencies matching Bun 1.3 plus a typecheck script
-- [ ] tsc --noEmit passes with zero errors across src and tests
-- [ ] Replaces fixed-sleep and silent-skip tests with deterministic polling or visible skips
+**Ship Criteria (3/3):**
+- [x] Adds typescript and @types/bun dev dependencies matching Bun 1.3 plus a typecheck script
+- [x] tsc --noEmit passes with zero errors across src and tests
+- [x] Replaces fixed-sleep and silent-skip tests with deterministic polling or visible skips
+
+> **Latest Pulse (2026-11-20T21:14:19.549Z):** Added typescript 5.9.3 + @types/bun 1.3.9 and bun run typecheck (0 errors); fixed TUI test fixtures that stored {mouse} instead of {enabled}; shared tests/helpers/{chromium,wait}.ts with PP_REQUIRE_UI_TESTS hard-fail; replaced fixed sleeps with polling (pp-4cq.2).
 
 ### Public Release Security & Privacy Audit (`public-release-security-audit`)
 
