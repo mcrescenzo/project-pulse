@@ -3,7 +3,7 @@ id: dashboard-view-modes
 title: Interactive Dependency Graph & Status Board Views
 milestone: v0.3
 order: 20
-status: in-progress
+status: shipped
 area: UI
 depends_on:
   - dashboard-polish-security
