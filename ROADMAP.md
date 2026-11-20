@@ -151,14 +151,16 @@ Adds switchable Feature DAG dependency graph and Status Board views alongside th
 
 ### Roadmap Activity Digest & Release Changelog (`activity-digest-changelog`)
 
-**Status:** `planned` | **Area:** CLI | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-rrp.4`
+**Status:** `in-progress` | **Area:** CLI | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-rrp.4`
 
 Compiles concise progress digests and release notes from roadmap updates, shipped features, and git history since a date, tag, or milestone.
 
-**Ship Criteria (0/3):**
-- [ ] pp digest summarizes shipped features, status movement, completed criteria, and notes since a date or git ref
-- [ ] pp changelog generates clean Markdown release notes for a milestone with --json support
-- [ ] Works gracefully in repos with minimal or unannotated git history
+**Ship Criteria (3/3):**
+- [x] pp digest summarizes shipped features, status movement, completed criteria, and notes since a date or git ref
+- [x] pp changelog generates clean Markdown release notes for a milestone with --json support
+- [x] Works gracefully in repos with minimal or unannotated git history
+
+> **Latest Pulse (2026-11-20T14:28:09.982Z):** Implemented src/digest.ts powering pp digest and pp changelog with git baseline diffing, ref/date parsing, and graceful fallback for minimal/non-git repos.
 
 ### One-Command Agent Onboarding & Repo Setup (`agent-repo-setup`)
 

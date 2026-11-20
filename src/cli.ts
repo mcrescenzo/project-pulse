@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
+import { buildChangelog, buildDigest } from "./digest";
 import { exportStaticHtml } from "./export";
 import { joinOrStartHub } from "./hub";
 import { runMcpServer } from "./mcp";
@@ -42,6 +43,7 @@ const VALUE_FLAGS = new Set([
   "reassign",
   "port",
   "out",
+  "since",
 ]);
 
 const BOOLEAN_FLAGS = new Set([
@@ -57,6 +59,7 @@ const BOOLEAN_FLAGS = new Set([
   "standalone",
   "force",
   "html",
+  "all",
 ]);
 
 const GLOBAL_VALUE_FLAGS = new Set(["root"]);
@@ -106,6 +109,8 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   check: { value: [], boolean: ["beads"] },
   view: { value: ["port"], boolean: ["no-open", "standalone"] },
   export: { value: ["out"], boolean: ["html", "beads"] },
+  digest: { value: ["since", "milestone"], boolean: [] },
+  changelog: { value: [], boolean: ["all"] },
   mcp: { value: [], boolean: [] },
 };
 
@@ -246,6 +251,8 @@ Usage:
   pp check [--beads] [--json]
   pp view [--port <n>] [--standalone] [--no-open]
   pp export --html [--out <path|->] [--beads] [--json]
+  pp digest [--since <date|7d|git-ref>] [--milestone <id>] [--json]
+  pp changelog [<milestone-id>] [--all] [--json]
   pp mcp
   pp --help | --version
 
@@ -740,6 +747,38 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           process.stdout.write(result.html);
         } else {
           console.log(`Exported static roadmap HTML to ${result.outPath} (${result.bytes} bytes)`);
+        }
+        return 0;
+      }
+
+      case "digest": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'digest'`);
+        }
+        const result = buildDigest(rootDir, {
+          since: getFlag(parsed, "since"),
+          milestone: getFlag(parsed, "milestone"),
+        });
+        if (jsonMode) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          process.stdout.write(result.markdown);
+        }
+        return 0;
+      }
+
+      case "changelog": {
+        if (rest.length > 0) {
+          throw new Error(`Unexpected argument '${rest[0]}' for 'changelog'`);
+        }
+        const result = buildChangelog(rootDir, {
+          milestone: subcmd,
+          all: parsed.booleans.has("all"),
+        });
+        if (jsonMode) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          process.stdout.write(result.markdown);
         }
         return 0;
       }
