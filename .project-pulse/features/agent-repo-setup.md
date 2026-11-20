@@ -3,7 +3,7 @@ id: agent-repo-setup
 title: One-Command Agent Onboarding & Repo Setup
 milestone: v0.3
 order: 40
-status: in-progress
+status: shipped
 area: Agent
 depends_on:
   - mcp-server

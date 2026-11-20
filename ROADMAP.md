@@ -119,7 +119,7 @@ Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
-**Status:** `active` | **Progress:** 4/5 features shipped
+**Status:** `active` | **Progress:** 5/5 features shipped
 
 Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
 
@@ -164,7 +164,7 @@ Compiles concise progress digests and release notes from roadmap updates, shippe
 
 ### One-Command Agent Onboarding & Repo Setup (`agent-repo-setup`)
 
-**Status:** `in-progress` | **Area:** Agent | **Depends on:** `mcp-server`, `cli-core-hardening` | **Refs:** `bd:pp-rrp.5`
+**Status:** `shipped` | **Area:** Agent | **Depends on:** `mcp-server`, `cli-core-hardening` | **Refs:** `bd:pp-rrp.5`
 
 Provides pp setup to wire AGENTS.md guidance, agent skill files, and MCP server config into any repository idempotently.
 
