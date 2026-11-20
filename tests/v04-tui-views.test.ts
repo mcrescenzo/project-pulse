@@ -161,6 +161,21 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(screen).toContain("v0.1 Core");
       expect(screen).toContain("v0.2 Next");
 
+      // Click KPI card "PLANNED" filters to planned (hiding shipped v0.1 Core), and clicking again toggles off
+      session.clickRegion(ctrl, "kpi-planned");
+      screen = ctrl.getBuffer().toPlainLines().join("\n");
+      expect(screen).not.toContain("v0.1 Core");
+      expect(screen).toContain("v0.2 Next");
+
+      session.clickRegion(ctrl, "kpi-planned");
+      screen = ctrl.getBuffer().toPlainLines().join("\n");
+      expect(screen).toContain("v0.1 Core");
+      expect(screen).toContain("v0.2 Next");
+
+      // Clicking live pill triggers disk refresh toast
+      session.clickRegion(ctrl, "refresh-btn");
+      expect(ctrl.getState().toast?.message).toContain("Refreshed");
+
       // Live search via / hides non-matching milestones
       ctrl.handleEvent({ type: "key", key: "/", raw: "/" });
       session.typeText(ctrl, "Terminal");

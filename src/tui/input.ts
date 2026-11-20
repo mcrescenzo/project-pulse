@@ -103,9 +103,50 @@ function decodeCsiKey(params: string, finalCh: string, raw: string): KeyEvent | 
   return { type: "key", key, shift, alt, ctrl, raw };
 }
 
+const X10_MOUSE_PREFIX = "\x1b[M";
+
+function decodeX10Mouse(cbByte: number, cxByte: number, cyByte: number): MouseEvent {
+  const cb = Math.max(0, cbByte - 32);
+  const shift = (cb & 4) !== 0;
+  const alt = (cb & 8) !== 0;
+  const ctrl = (cb & 16) !== 0;
+  const isMotion = (cb & 32) !== 0;
+  const isWheel = (cb & 64) !== 0;
+  const btnBits = cb & 3;
+  const x = Math.max(0, cxByte - 33);
+  const y = Math.max(0, cyByte - 33);
+
+  if (isWheel) {
+    return {
+      type: "mouse",
+      action: btnBits === 0 ? "wheel-up" : "wheel-down",
+      button: "none",
+      x,
+      y,
+      shift,
+      ctrl,
+      alt,
+    };
+  }
+
+  const button: MouseButton =
+    btnBits === 0 ? "left" : btnBits === 1 ? "middle" : btnBits === 2 ? "right" : "none";
+  const action: MouseAction = isMotion
+    ? button === "none"
+      ? "move"
+      : "drag"
+    : btnBits === 3
+    ? "up"
+    : "down";
+  return { type: "mouse", action, button, x, y, shift, ctrl, alt };
+}
+
 function isIncompleteEscPrefix(buf: string): boolean {
   if (buf === "\x1b" || buf === "\x1b[" || buf === "\x1bO" || buf === "\x1b[<") {
     return true;
+  }
+  if (buf.startsWith(X10_MOUSE_PREFIX)) {
+    return buf.length < 6;
   }
   if (buf.startsWith("\x1b[<")) {
     return !/[Mm]$/.test(buf) && /^\x1b\[<[0-9;]*$/.test(buf);
@@ -161,6 +202,21 @@ export class InputDecoder {
             )
           );
           this.pending = this.pending.slice(mouseMatch[0].length);
+          continue;
+        }
+
+        if (this.pending.startsWith(X10_MOUSE_PREFIX)) {
+          if (this.pending.length < 6) {
+            break;
+          }
+          events.push(
+            decodeX10Mouse(
+              this.pending.charCodeAt(3),
+              this.pending.charCodeAt(4),
+              this.pending.charCodeAt(5)
+            )
+          );
+          this.pending = this.pending.slice(6);
           continue;
         }
 
@@ -242,12 +298,14 @@ export interface TerminalSession {
   onResize(cb: (w: number, h: number) => void): () => void;
 }
 
-function buildMouseModeEscapes(opts: { enabled: boolean; hover: boolean }): string {
+export function buildMouseModeEscapes(opts: { enabled: boolean; hover: boolean }): string {
   if (!opts.enabled) {
-    return "\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+    return "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l";
   }
-  const base = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
-  return base + (opts.hover ? "\x1b[?1003h" : "\x1b[?1003l");
+  if (opts.hover) {
+    return "\x1b[?1000l\x1b[?1002l\x1b[?1003h\x1b[?1006h";
+  }
+  return "\x1b[?1003l\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 }
 
 export class NodeTerminalSession implements TerminalSession {

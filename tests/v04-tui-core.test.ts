@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli";
 import { RoadmapService } from "../src/store";
-import { encodeOsc52Copy, InputDecoder } from "../src/tui/input";
+import { buildMouseModeEscapes, encodeOsc52Copy, InputDecoder } from "../src/tui/input";
 import {
   detectColorMode,
   diffBuffers,
@@ -117,6 +117,32 @@ describe("v0.4 TUI Core Engine & CLI", () => {
     // Esc flushed when bare
     expect(decoder.feed("\x1b")).toEqual([]);
     expect(decoder.flushPendingEscape()).toEqual([{ type: "key", key: "escape", raw: "\x1b" }]);
+
+    // Legacy X10 mouse fallback (\x1b[M<cb><cx><cy>) across split chunks
+    expect(decoder.feed("\x1b[M")).toEqual([]);
+    expect(decoder.feed("\x20\x25\x23")).toEqual([
+      {
+        type: "mouse",
+        action: "down",
+        button: "left",
+        x: 4,
+        y: 2,
+        shift: false,
+        ctrl: false,
+        alt: false,
+      },
+    ]);
+  });
+
+  test("buildMouseModeEscapes orders mode resets before enables for Ghostty/xterm compatibility", () => {
+    const baseOnly = buildMouseModeEscapes({ enabled: true, hover: false });
+    expect(baseOnly).toBe("\x1b[?1003l\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+
+    const withHover = buildMouseModeEscapes({ enabled: true, hover: true });
+    expect(withHover).toBe("\x1b[?1000l\x1b[?1002l\x1b[?1003h\x1b[?1006h");
+
+    const disabled = buildMouseModeEscapes({ enabled: false, hover: false });
+    expect(disabled).toBe("\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l");
   });
 
   test("encodeOsc52Copy sanitizes escapes and produces valid OSC 52 sequence", () => {

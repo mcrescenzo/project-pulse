@@ -130,7 +130,10 @@ export class TuiController {
       this.render();
     });
     this.startWatchers();
-    this.session.enter({ mouse: this.state.mouseEnabled, hover: this.state.graphHoverEnabled });
+    this.session.enter({
+      mouse: this.state.mouseEnabled,
+      hover: this.state.viewMode === "graph" && this.state.graphHoverEnabled,
+    });
     this.render();
     if (this.state.beadsLoading) {
       void this.refreshBeadsAsync();
@@ -760,6 +763,25 @@ export class TuiController {
         this.toggleMouse();
         break;
       }
+      case "refresh-btn": {
+        this.reloadSync();
+        this.state.toast = { kind: "info", message: "Refreshed roadmap from disk" };
+        this.render();
+        break;
+      }
+      case "kpi-filter": {
+        const target = String(hit.data ?? "");
+        this.state.statusFilter = !target
+          ? ""
+          : this.state.statusFilter === target
+          ? ""
+          : target;
+        this.state.cardsScrollY = 0;
+        this.state.boardScrollY = {};
+        this.state.openPicker = null;
+        this.render();
+        break;
+      }
       case "quit-btn": {
         this.stop();
         break;
@@ -779,9 +801,21 @@ export class TuiController {
     }
   }
 
+  private syncMouseMode(): void {
+    const wantHover =
+      this.state.mouseEnabled &&
+      this.state.viewMode === "graph" &&
+      this.state.graphHoverEnabled;
+    this.session.setMouseMode({
+      enabled: this.state.mouseEnabled,
+      hover: wantHover,
+    });
+  }
+
   private switchView(mode: TuiViewMode): void {
     this.state.viewMode = mode;
     this.state.openPicker = null;
+    this.syncMouseMode();
     this.render();
   }
 
@@ -795,10 +829,7 @@ export class TuiController {
 
   private toggleMouse(): void {
     this.state.mouseEnabled = !this.state.mouseEnabled;
-    this.session.setMouseMode({
-      enabled: this.state.mouseEnabled,
-      hover: this.state.graphHoverEnabled,
-    });
+    this.syncMouseMode();
     this.state.toast = {
       kind: "info",
       message: this.state.mouseEnabled
@@ -1020,10 +1051,7 @@ export class TuiController {
     if (!this.state.graphHoverEnabled) {
       this.state.graphHoverId = null;
     }
-    this.session.setMouseMode({
-      enabled: this.state.mouseEnabled,
-      hover: this.state.graphHoverEnabled,
-    });
+    this.syncMouseMode();
     this.render();
   }
 

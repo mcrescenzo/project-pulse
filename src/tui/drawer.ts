@@ -540,7 +540,7 @@ export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: numb
     ["j / k / Wheel", "Select features or scroll active view / drawer"],
     ["Enter", "Open Feature Detail Drawer (split >= 120 cols, modal < 120)"],
     ["Graph Pan/Zoom", "Drag canvas to pan · Wheel / + / - zoom · 0 reset · F fit"],
-    ["Graph Click", "Hover OFF: 1st click traces, 2nd opens · h toggles Hover"],
+    ["Graph Click", "Hover ON by default: move traces, click opens · h toggles"],
     ["Drawer Actions", "Click status pills · Space toggles criterion · n logs note"],
     ["m (Mouse)", "Toggle SGR mouse off for native SSH/tmux drag-selection"],
     ["y (Copy ID)", "Copy active feature ID to host clipboard via OSC 52"],

@@ -130,7 +130,7 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
     }
   });
 
-  test("traces upstream amber & downstream green on first click (Hover OFF), opens drawer on second click, and supports Hover ON", () => {
+  test("enables Hover tracing by default in Graph view (move traces amber/green, single-click opens drawer) and supports Hover OFF mode", () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "Trace App" });
     svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "active", order: 10 });
@@ -143,36 +143,43 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
     ctrl.start();
 
     try {
+      // Hover tracking starts inactive in Cards view and enables automatically on Graph view switch
+      expect(ctrl.getState().graphHoverEnabled).toBe(true);
+      expect(session.mouseOpts.hover).toBe(false);
+
       session.clickDown(ctrl, "tab-graph");
-      expect(ctrl.getState().graphHoverEnabled).toBe(false);
-
-      // Click 1 selects/traces middle node B without opening drawer
-      session.clickFull(ctrl, "graph-node-feat-b");
-      expect(ctrl.getState().graphSelectedId).toBe("feat-b");
-      expect(ctrl.getState().drawerFeatureId).toBeNull();
-
-      // Upstream feat-a highlighted amberSoft; downstream feat-c highlighted greenSoft
-      const nodeA = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-a")!;
-      const nodeC = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-c")!;
-      expect(ctrl.getBuffer().getCell(nodeA.x, nodeA.y)?.fg).toEqual(TUI_PALETTE.amber);
-      expect(ctrl.getBuffer().getCell(nodeC.x, nodeC.y)?.fg).toEqual(TUI_PALETTE.green);
-
-      // Click 2 on already-selected node B opens drawer
-      session.clickFull(ctrl, "graph-node-feat-b");
-      expect(ctrl.getState().drawerFeatureId).toBe("feat-b");
-      ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
-
-      // Enable Hover ON -> enables ?1003h on session, move traces feat-a, single-click opens feat-c
-      session.clickDown(ctrl, "graph-hover-toggle");
       expect(ctrl.getState().graphHoverEnabled).toBe(true);
       expect(session.mouseOpts.hover).toBe(true);
 
-      const boxA = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-a")!;
-      ctrl.handleEvent({ type: "mouse", action: "move", button: "none", x: boxA.x + 1, y: boxA.y });
-      expect(ctrl.getState().graphHoverId).toBe("feat-a");
+      // Moving pointer over middle node B traces upstream feat-a (amber) and downstream feat-c (green)
+      const boxB = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-b")!;
+      ctrl.handleEvent({ type: "mouse", action: "move", button: "none", x: boxB.x + 1, y: boxB.y });
+      expect(ctrl.getState().graphHoverId).toBe("feat-b");
+      let nodeA = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-a")!;
+      let nodeC = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-c")!;
+      expect(ctrl.getBuffer().getCell(nodeA.x, nodeA.y)?.fg).toEqual(TUI_PALETTE.amber);
+      expect(ctrl.getBuffer().getCell(nodeC.x, nodeC.y)?.fg).toEqual(TUI_PALETTE.green);
 
+      // Single-click opens drawer when Hover is ON
       session.clickFull(ctrl, "graph-node-feat-c");
       expect(ctrl.getState().drawerFeatureId).toBe("feat-c");
+      ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
+
+      // Toggle Hover OFF -> disables ?1003h on session; click-1 traces feat-b, click-2 opens drawer
+      session.clickDown(ctrl, "graph-hover-toggle");
+      expect(ctrl.getState().graphHoverEnabled).toBe(false);
+      expect(session.mouseOpts.hover).toBe(false);
+
+      session.clickFull(ctrl, "graph-node-feat-b");
+      expect(ctrl.getState().graphSelectedId).toBe("feat-b");
+      expect(ctrl.getState().drawerFeatureId).toBeNull();
+      nodeA = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-a")!;
+      nodeC = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-feat-c")!;
+      expect(ctrl.getBuffer().getCell(nodeA.x, nodeA.y)?.fg).toEqual(TUI_PALETTE.amber);
+      expect(ctrl.getBuffer().getCell(nodeC.x, nodeC.y)?.fg).toEqual(TUI_PALETTE.green);
+
+      session.clickFull(ctrl, "graph-node-feat-b");
+      expect(ctrl.getState().drawerFeatureId).toBe("feat-b");
     } finally {
       ctrl.stop();
     }

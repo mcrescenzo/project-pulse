@@ -388,24 +388,7 @@ export function renderWaterfallGraphView(
     clampGraphCamera(layout.stageW, layout.stageH, vpRect, state.graphCamera);
   }
 
-  // Graph toolbar bar
-  const barY = rect.y;
-  buf.fillRect(rect.x, barY, rect.w, 1, { bg: TUI_PALETTE.bg });
-  let bx = rect.x + 1;
-  const controlsW = 34;
-  if (rect.w > controlsW + 26) {
-    const items: Array<{ label: string; style: CellStyle }> = [
-      { label: "■ Selected ", style: { fg: TUI_PALETTE.accent, bold: true } },
-      { label: "■ Upstream ", style: { fg: TUI_PALETTE.amber, bold: true } },
-      { label: "■ Downstream", style: { fg: TUI_PALETTE.green, bold: true } },
-    ];
-    for (const item of items) {
-      if (bx + item.label.length >= rect.x + rect.w - controlsW) break;
-      buf.writeText(bx, barY, item.label, item.label.length, item.style);
-      bx += item.label.length + 1;
-    }
-  }
-
+  // Graph toolbar bar — reserve exact width for right buttons first so they never clip beside split drawer
   const hoverLabel = state.graphHoverEnabled ? "Hover:ON" : "Hover:OFF";
   const rightBtns: Array<{ label: string; style: CellStyle; id: string; kind: string }> = [
     {
@@ -433,7 +416,23 @@ export function renderWaterfallGraphView(
   ];
   const rightTotal =
     rightBtns.reduce((s, b) => s + Array.from(b.label).length + 2, 0) + (rightBtns.length - 1);
-  let rx = Math.max(bx + 1, rect.x + rect.w - rightTotal - 1);
+
+  const barY = rect.y;
+  buf.fillRect(rect.x, barY, rect.w, 1, { bg: TUI_PALETTE.bg });
+  let bx = rect.x + 1;
+  const legendLimit = rect.x + rect.w - rightTotal - 2;
+  const items: Array<{ label: string; style: CellStyle }> = [
+    { label: "■ Selected ", style: { fg: TUI_PALETTE.accent, bold: true } },
+    { label: "■ Upstream ", style: { fg: TUI_PALETTE.amber, bold: true } },
+    { label: "■ Downstream", style: { fg: TUI_PALETTE.green, bold: true } },
+  ];
+  for (const item of items) {
+    if (bx + item.label.length > legendLimit) break;
+    buf.writeText(bx, barY, item.label, item.label.length, item.style);
+    bx += item.label.length + 1;
+  }
+
+  let rx = Math.max(rect.x + 1, rect.x + rect.w - rightTotal - 1);
   for (const btn of rightBtns) {
     const used = drawPill(buf, rx, barY, btn.label, btn.style, {
       id: btn.id,

@@ -131,7 +131,7 @@ export function createInitialTuiState(
     openPicker: null,
     pickerSelectedIndex: 0,
     mouseEnabled: true,
-    graphHoverEnabled: false,
+    graphHoverEnabled: true,
     graphSelectedId: null,
     graphHoverId: null,
     graphCamera: {
@@ -408,7 +408,7 @@ export function renderHeaderAndKpis(
     style: CellStyle;
     hit?: { id: string; kind: string };
   }> = [
-    { label: liveLabel, style: liveStyle },
+    { label: liveLabel, style: liveStyle, hit: { id: "refresh-btn", kind: "refresh-btn" } },
     { label: healthLabel, style: healthStyle, hit: { id: "health-toggle", kind: "health-toggle" } },
     { label: mouseLabel, style: mouseStyle, hit: { id: "mouse-toggle", kind: "mouse-toggle" } },
     {
@@ -453,6 +453,8 @@ export function renderHeaderAndKpis(
 
   const kpis = [
     {
+      id: "kpi-milestones",
+      filterValue: "",
       label: "MILESTONES",
       value:
         filtered.hasActiveFilters && filtered.visibleMilestones.length !== payload.milestones.length
@@ -461,6 +463,8 @@ export function renderHeaderAndKpis(
       fg: TUI_PALETTE.text,
     },
     {
+      id: "kpi-features",
+      filterValue: "",
       label: "FEATURES",
       value:
         filtered.hasActiveFilters && statFeatures.length !== payload.features.length
@@ -468,10 +472,10 @@ export function renderHeaderAndKpis(
           : String(statFeatures.length),
       fg: TUI_PALETTE.text,
     },
-    { label: "SHIPPED", value: String(shipped), fg: TUI_PALETTE.green },
-    { label: "ACTIVE", value: String(inProgress), fg: TUI_PALETTE.accent },
-    { label: "PLANNED", value: String(planned), fg: TUI_PALETTE.slate },
-    { label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
+    { id: "kpi-shipped", filterValue: "shipped", label: "SHIPPED", value: String(shipped), fg: TUI_PALETTE.green },
+    { id: "kpi-active", filterValue: "in-progress", label: "ACTIVE", value: String(inProgress), fg: TUI_PALETTE.accent },
+    { id: "kpi-planned", filterValue: "planned", label: "PLANNED", value: String(planned), fg: TUI_PALETTE.slate },
+    { id: "kpi-paused", filterValue: "paused", label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
   ];
 
   if (state.viewMode === "graph" || width < 90) {
@@ -480,8 +484,22 @@ export function renderHeaderAndKpis(
     for (const k of kpis) {
       const seg = `${k.label}: ${k.value}`;
       if (kx + seg.length + 2 >= width) break;
-      buf.writeText(kx, nextY, `${k.label}: `, seg.length, { fg: TUI_PALETTE.muted });
+      const activeKpi = Boolean(k.filterValue && state.statusFilter === k.filterValue);
+      buf.writeText(kx, nextY, `${k.label}: `, seg.length, {
+        fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.muted,
+        bold: activeKpi,
+      });
       buf.writeText(kx + k.label.length + 2, nextY, k.value, k.value.length, { fg: k.fg, bold: true });
+      buf.addHitRegion({
+        id: k.id,
+        kind: "kpi-filter",
+        x: kx,
+        y: nextY,
+        w: seg.length,
+        h: 1,
+        zIndex: 10,
+        data: k.filterValue,
+      });
       kx += seg.length + 2;
     }
     return nextY + 1;
@@ -494,16 +512,28 @@ export function renderHeaderAndKpis(
     const k = kpis[i]!;
     const bx = 1 + i * (boxW + gap);
     const bw = i === kpis.length - 1 ? width - 1 - bx : boxW;
+    const activeKpi = Boolean(k.filterValue && state.statusFilter === k.filterValue);
     buf.drawBox(bx, nextY, bw, 3, {
-      borderStyle: { fg: TUI_PALETTE.border },
-      fillStyle: { bg: TUI_PALETTE.surface },
+      borderStyle: { fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.border },
+      fillStyle: { bg: activeKpi ? TUI_PALETTE.accentSoft : TUI_PALETTE.surface },
     });
     buf.writeText(bx + 2, nextY + 1, k.label, Math.max(1, bw - 3 - k.value.length), {
-      fg: TUI_PALETTE.muted,
+      fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.muted,
+      bold: activeKpi,
     });
     buf.writeText(bx + bw - 2 - k.value.length, nextY + 1, k.value, k.value.length, {
       fg: k.fg,
       bold: true,
+    });
+    buf.addHitRegion({
+      id: k.id,
+      kind: "kpi-filter",
+      x: bx,
+      y: nextY,
+      w: bw,
+      h: 3,
+      zIndex: 10,
+      data: k.filterValue,
     });
   }
   return nextY + 3;

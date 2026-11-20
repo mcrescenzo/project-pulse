@@ -57,7 +57,7 @@ pp view --tui [--no-beads]
 ```
 
 - **Views & Filters:** Click tabs or press `1` (**Milestone Cards**), `2` (**Dependency Graph**), or `3` (**Status Board**); click filter pills (`M:`, `S:`, `A:`), press `/` for live search, or click `Reset`.
-- **Waterfall Graph:** Top-to-bottom dependency DAG with **3 zoom densities** (`Full`, `Compact`, `Overview/Fit` via wheel, `+`/`-`, `0`, `F`, or toolbar buttons) and **click-and-drag** panning. Hover is OFF by default over SSH (click once to trace amber upstream / green downstream, click again or `Enter` to open the drawer; toggle live hover with `h`).
+- **Waterfall Graph:** Top-to-bottom dependency DAG with **3 zoom densities** (`Full`, `Compact`, `Overview/Fit` via wheel, `+`/`-`, `0`, `F`, or toolbar buttons) and **click-and-drag** panning. Mouse tracking and hover tracing are ON by default in Graph view (hover traces amber upstream / green downstream, click opens the drawer; press `h` or click `Hover:ON` to switch to click-1 trace / click-2 open).
 - **Interactive Drawer:** Opens as a right split-pane on wide terminals (`>= 120` cols) or centered modal on narrow panes (`< 120` cols). Update feature status, toggle ship criteria (`Space` or click), and log pulse notes (`n` + `Enter`) with automatic `.project-pulse/` + `ROADMAP.md` persistence and live `fs.watch` reload.
 - **SSH Ergonomics:** Press `m` to toggle SGR mouse capture off/on for native terminal drag-selection, `y` to copy the active feature ID via OSC 52, `?` for shortcuts, and `q` to restore your terminal cleanly.
 
