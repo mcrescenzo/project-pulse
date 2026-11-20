@@ -7,7 +7,7 @@ import { chromium, type Browser } from "playwright-core";
 import { runCli } from "../src/cli";
 import { exportStaticHtml } from "../src/export";
 import { RoadmapService } from "../src/store";
-import { resolveChromiumExecutable } from "./helpers/chromium";
+import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const testUi = CHROMIUM_PATH ? test : test.skip;
@@ -178,5 +178,5 @@ describe("v0.3 Static HTML Export", () => {
     } finally {
       await context.close();
     }
-  });
+  }, BROWSER_TEST_TIMEOUT_MS);
 });

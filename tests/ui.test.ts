@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { RoadmapService } from "../src/store";
 import { startViewServer, type ViewServerHandle } from "../src/view";
-import { resolveChromiumExecutable } from "./helpers/chromium";
+import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const describeUi = CHROMIUM_PATH ? describe : describe.skip;
@@ -140,7 +140,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     } finally {
       await context.close();
     }
-  });
+  }, BROWSER_TEST_TIMEOUT_MS);
 
   test("switches between Cards, Dependency Graph, and Status Board views with shared filters and DAG highlight", async () => {
     const svc = new RoadmapService(tempDir);
@@ -313,5 +313,5 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     } finally {
       await context.close();
     }
-  });
+  }, BROWSER_TEST_TIMEOUT_MS);
 });

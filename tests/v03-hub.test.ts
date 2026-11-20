@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { joinOrStartHub, startHubServer, type HubServerHandle } from "../src/hub";
 import { RoadmapService } from "../src/store";
-import { resolveChromiumExecutable } from "./helpers/chromium";
+import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";
 import { authFetch } from "./helpers/auth";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
@@ -204,7 +204,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     } finally {
       await context.close();
     }
-  });
+  }, BROWSER_TEST_TIMEOUT_MS);
 
   test("CLI pp view joins running hub and --standalone runs isolated server", async () => {
     const repoA = makeRepo("cli-hub-a", "CLI Hub A", "feat-a");
