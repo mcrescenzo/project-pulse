@@ -72,7 +72,7 @@ Localhost web viewer powered by Bun.serve with file-watch live reload.
 
 ## v0.2 — Hardening & UX Polish (`v0.2`)
 
-**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 1/3 features shipped
+**Status:** `active` | **Target:** 2027-Q1 | **Progress:** 2/3 features shipped
 
 Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhost CSRF protection, dashboard accessibility, and Playwright regression tests.
 
@@ -92,7 +92,7 @@ Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria 
 
 ### Batched & Cached Beads Resolution (`beads-resolution-perf`)
 
-**Status:** `in-progress` | **Area:** Integrations | **Depends on:** `orientation-and-beads` | **Refs:** `bd:pp-01q.2`
+**Status:** `shipped` | **Area:** Integrations | **Depends on:** `orientation-and-beads` | **Refs:** `bd:pp-01q.2`
 
 Eliminates serial N+1 bd show subprocess calls via batched lookup and per-invocation caching across CLI and dashboard endpoints.
 

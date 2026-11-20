@@ -3,7 +3,7 @@ id: beads-resolution-perf
 title: Batched & Cached Beads Resolution
 milestone: v0.2
 order: 20
-status: in-progress
+status: shipped
 area: Integrations
 depends_on:
   - orientation-and-beads
