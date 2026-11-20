@@ -3,7 +3,7 @@ id: multi-project-hub
 title: Auto-Joining Multi-Project Local Hub
 milestone: v0.3
 order: 10
-status: in-progress
+status: shipped
 area: UI
 depends_on:
   - dashboard-polish-security
