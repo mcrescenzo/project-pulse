@@ -188,7 +188,57 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 > **Latest Pulse (2026-11-20T14:26:35.095Z):** Implemented src/export.ts and pp export --html with deterministic zero-network standalone HTML output, XSS-safe script escaping, --out support, and offline Chromium verification.
 
-## v0.4 — Open-Source Public Release (`v0.4`)
+## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
+
+**Status:** `active` | **Progress:** 0/4 features shipped
+
+Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
+
+### TUI Core Engine & CLI Entrypoint (`tui-core-engine`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`, `cli-core-hardening` | **Refs:** `bd:pp-02n.1`
+
+Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer, OSC 52 copy, and pp view --tui CLI wiring.
+
+**Ship Criteria (0/3):**
+- [ ] Zero-dependency 2D cell-buffer renderer with ANSI diffing, synchronized output, color/NO_COLOR auto-detection, and escape sanitization
+- [ ] Stateful keyboard and SGR mouse input decoder with z-indexed hit-test regions, OSC 52 copy, and guaranteed raw-mode/alt-screen teardown
+- [ ] Explicit pp view --tui [--no-beads] CLI wiring rejecting non-TTY sessions and incompatible HTTP flags
+
+### TUI Views, Filters & Health Diagnostics (`tui-views-and-filters`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `tui-core-engine` | **Refs:** `bd:pp-02n.2`
+
+Header, KPI strip, Health & Drift overlay, clickable filter pickers, / search, responsive Milestone Cards, and Status Board columns.
+
+**Ship Criteria (0/3):**
+- [ ] Header, KPI strip, clickable Health & Drift overlay with jump-to-feature, and shared view/filter bar with floating pickers and / search
+- [ ] Responsive 1-3 column Milestone Cards view hiding empty milestones when filtering and Status Board columns with keyboard and wheel scrolling
+- [ ] Virtual screen-buffer test suite covering filters, view switching, scrolling, and health diagnostics
+
+### TUI Waterfall Dependency Graph (`tui-waterfall-graph`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `tui-core-engine`, `dashboard-view-modes` | **Refs:** `bd:pp-02n.3`
+
+Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, click-and-drag panning, and dependency chain highlighting.
+
+**Ship Criteria (0/3):**
+- [ ] Top-to-bottom orthogonal waterfall DAG with parent-barycenter ordering and 3 discrete density zoom levels (Full, Compact, Overview/Fit)
+- [ ] Click-and-drag panning with drag threshold, wheel/+/-/0/F zoom controls, and expanded viewport height in Graph mode
+- [ ] Hover OFF by default over SSH (click once to trace amber upstream / green downstream, click again or Enter to open drawer) plus optional Hover toggle
+
+### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
+
+**Status:** `planned` | **Area:** UI | **Depends on:** `tui-views-and-filters`, `tui-waterfall-graph` | **Refs:** `bd:pp-02n.4`
+
+Responsive split/modal Feature Detail Drawer with criteria/status/note persistence, debounced fs.watch reload, async Beads refresh, and PTY smoke test.
+
+**Ship Criteria (0/3):**
+- [ ] Responsive split-pane (>= 120 cols) and full-height modal (< 120 cols) Feature Detail Drawer with status pills, criteria toggles, Depends On jumps, and draft-preserving pulse notes
+- [ ] Instant first paint from disk with non-blocking async Beads refresh, debounced fs.watch live reload, m mouse toggle, y OSC 52 copy, and ? help overlay
+- [ ] End-to-end virtual-buffer interaction tests and real headless PTY smoke test verifying alt-screen entry and clean exit restoration
+
+## v0.5 — Open-Source Public Release (`v0.5`)
 
 **Status:** `planned` | **Progress:** 0/3 features shipped
 
@@ -196,7 +246,7 @@ Security and privacy audit, open-source documentation and CI, and public GitHub 
 
 ### Public Release Security & Privacy Audit (`public-release-security-audit`)
 
-**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`
+**Status:** `planned` | **Area:** Security | **Depends on:** `dashboard-polish-security`, `multi-project-hub`, `tui-interactive-drawer`
 
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.
 

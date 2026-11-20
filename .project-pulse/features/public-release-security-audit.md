@@ -1,16 +1,17 @@
 ---
 id: public-release-security-audit
 title: Public Release Security & Privacy Audit
-milestone: v0.4
+milestone: v0.5
 order: 10
 status: planned
 area: Security
-depends_on: 
+depends_on:
   - dashboard-polish-security
   - multi-project-hub
-refs: 
+  - tui-interactive-drawer
+refs:
   []
-ship_criteria: 
+ship_criteria:
   - id: audits-source-docs-and
     text: "Audits source, docs, and git history for leaked secrets, hardcoded local paths, or private environment assumptions"
     done: false
@@ -20,7 +21,7 @@ ship_criteria:
   - id: documents-audit-checklist-result
     text: Documents audit checklist results and resolves all high/medium findings
     done: false
-updates: 
+updates:
   []
 ---
 Audits source code, dependencies, tests, docs, and git history to confirm the repository is safe for public open-source release.

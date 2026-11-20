@@ -1,15 +1,15 @@
 ---
 id: public-repo-launch
 title: Public GitHub Repository Launch
-milestone: v0.4
+milestone: v0.5
 order: 30
 status: planned
 area: Release
-depends_on: 
+depends_on:
   - oss-docs-and-ci
-refs: 
+refs:
   []
-ship_criteria: 
+ship_criteria:
   - id: configures-github-remote-repo
     text: "Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection"
     done: false
@@ -19,7 +19,7 @@ ship_criteria:
   - id: switches-github-repository-visib
     text: Switches GitHub repository visibility to public with green CI on main
     done: false
-updates: 
+updates:
   []
 ---
 Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
