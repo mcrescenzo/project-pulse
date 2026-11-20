@@ -3,7 +3,7 @@ id: tui-interactive-drawer
 title: TUI Interactive Detail Drawer & Live Watch
 milestone: v0.4
 order: 40
-status: planned
+status: in-progress
 area: UI
 depends_on:
   - tui-views-and-filters

@@ -1,6 +1,9 @@
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import type { BeadsClient } from "../beads";
 import { buildRoadmapViewPayload } from "../view";
 import { RoadmapService } from "../store";
+import type { FeatureStatus } from "../types";
+import { getDrawerRect, renderFeatureDrawer, renderHelpOverlay } from "./drawer";
 import {
   clampGraphCamera,
   computeWaterfallLayout,
@@ -11,7 +14,7 @@ import {
   stepGraphZoom,
   type WaterfallLayout,
 } from "./graph";
-import { NodeTerminalSession, type InputEvent, type KeyEvent, type MouseEvent, type TerminalSession } from "./input";
+import { encodeOsc52Copy, NodeTerminalSession, type InputEvent, type KeyEvent, type MouseEvent, type TerminalSession } from "./input";
 import { diffBuffers, ScreenBuffer, TUI_PALETTE, type HitRegion } from "./screen";
 import {
   buildPickerOptions,
@@ -57,6 +60,9 @@ export class TuiController {
   private lastCardsMaxScroll = 0;
   private lastBoardCols: string[] = [];
   private lastGraphLayout: WaterfallLayout | null = null;
+  private lastDrawerMaxScroll = 0;
+  private watchers: FSWatcher[] = [];
+  private watchDebounce: ReturnType<typeof setTimeout> | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
   private graphDrag: {
     startX: number;
@@ -102,7 +108,7 @@ export class TuiController {
         },
         beads: {},
       },
-      { noBeads: Boolean(options.noBeads), beadsLoading: beadsWanted }
+      { noBeads: Boolean(options.noBeads), beadsLoading: beadsWanted, liveWatchActive: true }
     );
     this.currentBuf = new ScreenBuffer(this.session.width, this.session.height);
   }
@@ -123,6 +129,7 @@ export class TuiController {
     this.offResize = this.session.onResize(() => {
       this.render();
     });
+    this.startWatchers();
     this.session.enter({ mouse: this.state.mouseEnabled, hover: this.state.graphHoverEnabled });
     this.render();
     if (this.state.beadsLoading) {
@@ -137,8 +144,44 @@ export class TuiController {
     this.offResize?.();
     this.offInput = null;
     this.offResize = null;
+    if (this.watchDebounce) {
+      clearTimeout(this.watchDebounce);
+      this.watchDebounce = null;
+    }
+    for (const watcher of this.watchers) {
+      try {
+        watcher.close();
+      } catch {
+        // Ignore watcher teardown errors
+      }
+    }
+    this.watchers = [];
     this.session.leave();
     this.onExit?.();
+  }
+
+  private startWatchers(): void {
+    if (this.watchers.length > 0) return;
+    const scheduleReload = () => {
+      if (this.stopped) return;
+      if (this.watchDebounce) clearTimeout(this.watchDebounce);
+      this.watchDebounce = setTimeout(() => {
+        this.watchDebounce = null;
+        if (!this.stopped) this.reloadSync();
+      }, 150);
+    };
+    for (const dir of [this.service.pulseDir, this.service.milestonesDir, this.service.featuresDir]) {
+      if (!existsSync(dir)) continue;
+      try {
+        const w = watch(dir, { persistent: false }, (_eventType, filename) => {
+          if (filename && String(filename).includes(".tmp.")) return;
+          scheduleReload();
+        });
+        this.watchers.push(w);
+      } catch {
+        // Non-fatal if OS watcher quota is exhausted
+      }
+    }
   }
 
   async refreshBeadsAsync(): Promise<void> {
@@ -172,7 +215,12 @@ export class TuiController {
     y = renderTabsAndFilters(buf, y, w, this.state, filtered);
 
     const contentH = Math.max(4, h - y - 1);
-    const rect: Rect = { x: 0, y, w, h: contentH };
+    const hasDrawer =
+      Boolean(this.state.drawerFeatureId) &&
+      this.state.payload.features.some((f) => f.id === this.state.drawerFeatureId);
+    const drawerLayout = hasDrawer ? getDrawerRect(w, h, y) : null;
+    const mainW = drawerLayout && drawerLayout.mode === "split" ? Math.max(30, drawerLayout.x) : w;
+    const rect: Rect = { x: 0, y, w: mainW, h: contentH };
     this.mainRect = rect;
 
     if (this.state.viewMode === "cards") {
@@ -192,8 +240,13 @@ export class TuiController {
         : [];
     }
 
+    const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state);
+    this.lastDrawerMaxScroll = drawerResult ? drawerResult.maxScrollY : 0;
     renderFloatingPicker(buf, w, h, this.state);
     renderHealthOverlay(buf, w, h, this.state);
+    if (this.state.helpOpen) {
+      renderHelpOverlay(buf, w, h);
+    }
     renderFooter(buf, h - 1, w, this.state);
 
     this.session.write(diffBuffers(this.prevBuf, buf, this.session.colorMode));
@@ -245,6 +298,14 @@ export class TuiController {
       }
     }
 
+    if (this.state.helpOpen) {
+      if (ev.key === "escape" || ev.key === "?" || ev.key === "q") {
+        this.state.helpOpen = false;
+        this.render();
+      }
+      return;
+    }
+
     if (this.state.healthPanelOpen) {
       if (ev.key === "escape") {
         this.state.healthPanelOpen = false;
@@ -274,20 +335,83 @@ export class TuiController {
       return;
     }
 
+    if (this.state.drawerFeatureId && this.state.drawerFocus === "note") {
+      this.handleDrawerNoteKey(ev, this.state.drawerFeatureId);
+      return;
+    }
+
     if (ev.key === "q") {
       this.stop();
       return;
     }
 
+    if (ev.key === "?") {
+      this.state.helpOpen = true;
+      this.render();
+      return;
+    }
+
+    if (ev.key === "y") {
+      this.copyActiveFeatureId();
+      return;
+    }
+
     if (ev.key === "escape") {
       if (this.state.drawerFeatureId) {
-        this.state.drawerFeatureId = null;
-        this.render();
+        this.closeDrawer();
       } else if (this.state.toast) {
         this.state.toast = null;
         this.render();
       }
       return;
+    }
+
+    if (this.state.drawerFeatureId) {
+      const feature = this.state.payload.features.find((f) => f.id === this.state.drawerFeatureId);
+      if (ev.key === "n") {
+        this.focusDrawerNote(this.state.drawerFeatureId);
+        return;
+      }
+      if (ev.key === "tab") {
+        this.state.drawerFocus = this.state.drawerFocus === "criteria" ? "note" : "criteria";
+        if (this.state.drawerFocus === "note") {
+          this.state.noteCursor = Array.from(
+            this.state.noteDrafts[this.state.drawerFeatureId] ?? ""
+          ).length;
+        }
+        this.render();
+        return;
+      }
+      if (ev.key === " " && feature && feature.ship_criteria.length > 0) {
+        const crit = feature.ship_criteria[this.state.drawerCriterionIndex];
+        if (crit) {
+          this.toggleCriterion(feature.id, crit.id, !crit.done);
+        }
+        return;
+      }
+      if ((ev.key === "down" || ev.key === "j") && feature && feature.ship_criteria.length > 0) {
+        this.state.drawerCriterionIndex = Math.min(
+          feature.ship_criteria.length - 1,
+          this.state.drawerCriterionIndex + 1
+        );
+        this.render();
+        return;
+      }
+      if ((ev.key === "up" || ev.key === "k") && feature && feature.ship_criteria.length > 0) {
+        this.state.drawerCriterionIndex = Math.max(0, this.state.drawerCriterionIndex - 1);
+        this.render();
+        return;
+      }
+      if (ev.key === "pagedown") {
+        this.state.drawerScrollY = Math.min(this.lastDrawerMaxScroll, this.state.drawerScrollY + 4);
+        this.render();
+        return;
+      }
+      if (ev.key === "pageup") {
+        this.state.drawerScrollY = Math.max(0, this.state.drawerScrollY - 4);
+        this.render();
+        return;
+      }
     }
 
     if (ev.key === "1") {
@@ -379,15 +503,14 @@ export class TuiController {
       return;
     }
     if (ev.key === "enter" && this.state.selectedFeatureId) {
-      this.state.drawerFeatureId = this.state.selectedFeatureId;
-      this.render();
+      this.openDrawer(this.state.selectedFeatureId);
     }
   }
 
   private handleMouse(ev: MouseEvent): void {
     const hit = this.currentBuf.hitTest(ev.x, ev.y);
     if (ev.action === "move") {
-      if (this.state.viewMode === "graph" && this.state.graphHoverEnabled) {
+      if (this.state.viewMode === "graph" && this.state.graphHoverEnabled && !this.state.openPicker && !this.state.healthPanelOpen && !this.state.helpOpen) {
         const nextHover = hit?.kind === "graph-node" ? String(hit.data ?? "") : null;
         if (nextHover !== this.state.graphHoverId) {
           this.state.graphHoverId = nextHover;
@@ -427,6 +550,11 @@ export class TuiController {
       return;
     }
     if (ev.action === "wheel-down") {
+      if (hit && hit.kind.startsWith("drawer-")) {
+        this.state.drawerScrollY = Math.min(this.lastDrawerMaxScroll, this.state.drawerScrollY + 2);
+        this.render();
+        return;
+      }
       if (this.state.viewMode === "graph" && (hit?.kind === "graph-viewport" || hit?.kind === "graph-node")) {
         this.zoomGraph(-1);
         return;
@@ -435,6 +563,11 @@ export class TuiController {
       return;
     }
     if (ev.action === "wheel-up") {
+      if (hit && hit.kind.startsWith("drawer-")) {
+        this.state.drawerScrollY = Math.max(0, this.state.drawerScrollY - 2);
+        this.render();
+        return;
+      }
       if (this.state.viewMode === "graph" && (hit?.kind === "graph-viewport" || hit?.kind === "graph-node")) {
         this.zoomGraph(1);
         return;
@@ -446,6 +579,60 @@ export class TuiController {
 
     this.state.searchFocused = false;
     switch (hit.kind) {
+      case "help-toggle": {
+        this.state.helpOpen = !this.state.helpOpen;
+        this.render();
+        break;
+      }
+      case "help-close":
+      case "help-backdrop": {
+        this.state.helpOpen = false;
+        this.render();
+        break;
+      }
+      case "copy-id": {
+        this.copyActiveFeatureId(String(hit.data ?? ""));
+        break;
+      }
+      case "drawer-close":
+      case "drawer-backdrop": {
+        this.closeDrawer();
+        break;
+      }
+      case "drawer-status": {
+        if (this.state.drawerFeatureId) {
+          this.updateFeatureStatus(this.state.drawerFeatureId, String(hit.data) as FeatureStatus);
+        }
+        break;
+      }
+      case "drawer-criterion": {
+        if (this.state.drawerFeatureId) {
+          const d = hit.data as { criterionId: string; done: boolean; index: number };
+          this.state.drawerFocus = "criteria";
+          this.state.drawerCriterionIndex = d.index;
+          this.toggleCriterion(this.state.drawerFeatureId, d.criterionId, d.done);
+        }
+        break;
+      }
+      case "drawer-jump": {
+        const targetId = String(hit.data ?? "");
+        if (targetId) {
+          this.openDrawer(targetId);
+        }
+        break;
+      }
+      case "drawer-note-input": {
+        if (this.state.drawerFeatureId) {
+          this.focusDrawerNote(this.state.drawerFeatureId);
+        }
+        break;
+      }
+      case "drawer-note-submit": {
+        if (this.state.drawerFeatureId) {
+          this.submitPulseNote(this.state.drawerFeatureId);
+        }
+        break;
+      }
       case "graph-hover-toggle": {
         this.toggleGraphHover();
         break;
@@ -565,10 +752,8 @@ export class TuiController {
         const targetId = String(hit.data ?? "");
         this.state.healthPanelOpen = false;
         if (targetId) {
-          this.state.selectedFeatureId = targetId;
-          this.state.drawerFeatureId = targetId;
+          this.openDrawer(targetId);
         }
-        this.render();
         break;
       }
       case "mouse-toggle": {
@@ -587,9 +772,7 @@ export class TuiController {
       case "feature-card": {
         const fid = String(hit.data ?? "");
         if (fid) {
-          this.state.selectedFeatureId = fid;
-          this.state.drawerFeatureId = fid;
-          this.render();
+          this.openDrawer(fid);
         }
         break;
       }
@@ -625,19 +808,169 @@ export class TuiController {
     this.render();
   }
 
-  private reloadSync(): void {
+  private reloadSync(options: { preserveFeedback?: boolean } = {}): void {
     const loaded = this.service.load();
     const fastCheck = this.service.check(loaded);
+    const knownIds = new Set(loaded.milestones.map((m) => m.id));
+    const defaultId = loaded.config.defaults.milestone;
+    const milestones = [...loaded.milestones];
+    if (!knownIds.has(defaultId) && loaded.features.some((f) => f.milestone === defaultId)) {
+      milestones.push({
+        id: defaultId,
+        title: "Backlog",
+        order: 9999,
+        status: "planned",
+        description: "Features queued without a specific release milestone.",
+      });
+    }
     this.state.payload = {
       config: loaded.config,
-      milestones: loaded.milestones,
+      milestones,
       features: loaded.features,
       check: { ok: fastCheck.ok, errors: fastCheck.errors, warnings: fastCheck.warnings },
       beads: this.state.payload.beads,
     };
+    if (!options.preserveFeedback) {
+      this.state.drawerFeedback = null;
+    }
     this.render();
     if (!this.state.noBeads && loaded.config.integrations.beads.enabled) {
       void this.refreshBeadsAsync();
+    }
+  }
+
+  private openDrawer(featureId: string): void {
+    this.state.selectedFeatureId = featureId;
+    this.state.drawerFeatureId = featureId;
+    this.state.drawerScrollY = 0;
+    this.state.drawerFocus = "criteria";
+    this.state.drawerCriterionIndex = 0;
+    this.state.drawerFeedback = null;
+    this.render();
+  }
+
+  private closeDrawer(): void {
+    this.state.drawerFeatureId = null;
+    this.state.drawerFocus = "criteria";
+    this.state.drawerFeedback = null;
+    this.render();
+  }
+
+  private focusDrawerNote(featureId: string): void {
+    this.state.drawerFocus = "note";
+    this.state.noteCursor = Array.from(this.state.noteDrafts[featureId] ?? "").length;
+    this.render();
+  }
+
+  private copyActiveFeatureId(explicitId?: string): void {
+    const target =
+      explicitId ||
+      this.state.drawerFeatureId ||
+      (this.state.viewMode === "graph" ? this.state.graphSelectedId : null) ||
+      this.state.selectedFeatureId;
+    if (!target) {
+      this.state.toast = { kind: "info", message: "No feature selected to copy" };
+      this.render();
+      return;
+    }
+    this.session.copyToClipboard(target);
+    this.state.toast = { kind: "ok", message: `Copied ID to clipboard: ${target}` };
+    this.render();
+  }
+
+  private toggleCriterion(featureId: string, criterionId: string, done: boolean): void {
+    try {
+      this.service.checkFeatureCriterion(featureId, criterionId, done);
+      this.state.drawerFeedback = { kind: "ok", message: "Saved criterion update" };
+      this.reloadSync({ preserveFeedback: true });
+    } catch (error) {
+      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.render();
+    }
+  }
+
+  private updateFeatureStatus(featureId: string, status: FeatureStatus): void {
+    try {
+      this.service.updateFeature(featureId, { status });
+      this.state.drawerFeedback = { kind: "ok", message: `Saved status: ${status}` };
+      this.reloadSync({ preserveFeedback: true });
+    } catch (error) {
+      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.render();
+    }
+  }
+
+  private submitPulseNote(featureId: string): void {
+    const note = (this.state.noteDrafts[featureId] ?? "").trim();
+    if (!note) return;
+    try {
+      this.service.addFeatureNote(featureId, note);
+      delete this.state.noteDrafts[featureId];
+      this.state.noteCursor = 0;
+      this.state.drawerFeedback = { kind: "ok", message: "Logged pulse note" };
+      this.reloadSync({ preserveFeedback: true });
+    } catch (error) {
+      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.render();
+    }
+  }
+
+  private handleDrawerNoteKey(ev: KeyEvent, featureId: string): void {
+    if (ev.key === "escape") {
+      this.state.drawerFocus = "criteria";
+      this.render();
+      return;
+    }
+    if (ev.key === "enter") {
+      this.submitPulseNote(featureId);
+      return;
+    }
+    const glyphs = Array.from(this.state.noteDrafts[featureId] ?? "");
+    let cursor = Math.max(0, Math.min(this.state.noteCursor, glyphs.length));
+    if (ev.key === "left") {
+      this.state.noteCursor = Math.max(0, cursor - 1);
+      this.render();
+      return;
+    }
+    if (ev.key === "right") {
+      this.state.noteCursor = Math.min(glyphs.length, cursor + 1);
+      this.render();
+      return;
+    }
+    if (ev.key === "home") {
+      this.state.noteCursor = 0;
+      this.render();
+      return;
+    }
+    if (ev.key === "end") {
+      this.state.noteCursor = glyphs.length;
+      this.render();
+      return;
+    }
+    if (ev.key === "backspace") {
+      if (cursor > 0) {
+        glyphs.splice(cursor - 1, 1);
+        cursor -= 1;
+        this.state.noteDrafts[featureId] = glyphs.join("");
+        this.state.noteCursor = cursor;
+        this.render();
+      }
+      return;
+    }
+    if (ev.key === "delete") {
+      if (cursor < glyphs.length) {
+        glyphs.splice(cursor, 1);
+        this.state.noteDrafts[featureId] = glyphs.join("");
+        this.state.noteCursor = cursor;
+        this.render();
+      }
+      return;
+    }
+    if (!ev.ctrl && !ev.alt && ev.key.length === 1) {
+      glyphs.splice(cursor, 0, ev.key);
+      this.state.noteDrafts[featureId] = glyphs.join("");
+      this.state.noteCursor = cursor + 1;
+      this.render();
     }
   }
 
@@ -669,20 +1002,17 @@ export class TuiController {
       return;
     }
     if (this.state.graphHoverEnabled) {
-      this.state.selectedFeatureId = targetNodeId;
+      this.openDrawer(targetNodeId);
       this.state.graphSelectedId = targetNodeId;
-      this.state.drawerFeatureId = targetNodeId;
-      this.render();
       return;
     }
     if (this.state.graphSelectedId === targetNodeId) {
-      this.state.selectedFeatureId = targetNodeId;
-      this.state.drawerFeatureId = targetNodeId;
+      this.openDrawer(targetNodeId);
     } else {
       this.state.graphSelectedId = targetNodeId;
       this.state.selectedFeatureId = targetNodeId;
+      this.render();
     }
-    this.render();
   }
 
   private toggleGraphHover(): void {

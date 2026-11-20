@@ -235,7 +235,7 @@ Top-to-bottom orthogonal waterfall DAG with 3 discrete density zoom levels, clic
 
 ### TUI Interactive Detail Drawer & Live Watch (`tui-interactive-drawer`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `tui-views-and-filters`, `tui-waterfall-graph` | **Refs:** `bd:pp-02n.4`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `tui-views-and-filters`, `tui-waterfall-graph` | **Refs:** `bd:pp-02n.4`
 
 Responsive split/modal Feature Detail Drawer with criteria/status/note persistence, debounced fs.watch reload, async Beads refresh, and PTY smoke test.
 
