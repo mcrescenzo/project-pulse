@@ -44,7 +44,7 @@ export const WATERFALL_SPECS: Record<GraphZoomLevel, WaterfallSpec> = {
   },
   overview: {
     zoom: "overview",
-    label: "Fit",
+    label: "30%",
     nodeW: 20,
     nodeH: 1,
     colGap: 2,
@@ -548,7 +548,7 @@ export function renderWaterfallGraphView(
       }
       addMask(x2, y2, BIT_N, priority, edgeStyle, true);
     } else {
-      const midY = y1 + Math.floor((y2 - y1) / 2);
+      const midY = layout.spec.rowGap >= 2 ? y2 - 1 : y2;
       for (let sy = y1; sy < midY; sy++) {
         addMask(x1, sy, BIT_N | BIT_S, priority, edgeStyle);
       }

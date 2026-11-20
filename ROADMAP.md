@@ -190,7 +190,7 @@ Generates a single self-contained offline HTML roadmap snapshot from .project-pu
 
 ## v0.4 — Interactive Terminal Dashboard (TUI) (`v0.4`)
 
-**Status:** `active` | **Progress:** 4/4 features shipped
+**Status:** `shipped` | **Progress:** 4/4 features shipped
 
 Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Milestone Cards, Waterfall Dependency Graph, Status Board, and interactive Detail Drawer.
 
