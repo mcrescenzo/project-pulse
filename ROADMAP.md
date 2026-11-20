@@ -282,17 +282,17 @@ Audits source code, dependencies, tests, docs, and git history to confirm the re
 
 ### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
 
-**Status:** `planned` | **Area:** Docs | **Depends on:** `public-release-security-audit`, `typecheck-baseline` | **Refs:** `bd:pp-4cq.4`
+**Status:** `in-progress` | **Area:** Docs | **Depends on:** `public-release-security-audit`, `typecheck-baseline` | **Refs:** `bd:pp-4cq.4`
 
 Adds open-source license, contribution and security policies, polished README with screenshots, and automated GitHub Actions CI.
 
-**Ship Criteria (0/6):**
-- [ ] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
-- [ ] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
+**Ship Criteria (5/6):**
+- [x] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
+- [x] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
 - [ ] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
-- [ ] Completes package.json public metadata (license, repository, homepage, bugs, engines, keywords)
-- [ ] Replaces stale SPEC.md with docs/architecture.md and generalizes AGENTS.md for contributors
-- [ ] Generates CHANGELOG.md via pp changelog --all
+- [x] Completes package.json public metadata (license, repository, homepage, bugs, engines, keywords)
+- [x] Replaces stale SPEC.md with docs/architecture.md and generalizes AGENTS.md for contributors
+- [x] Generates CHANGELOG.md via pp changelog --all
 
 ### Public GitHub Repository Launch (`public-repo-launch`)
 
