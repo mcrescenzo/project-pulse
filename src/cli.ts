@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { CliBeadsClient, type BeadsClient } from "./beads";
-import { formatFeatureText, formatSummaryText, RoadmapService } from "./store";
+import { runMcpServer } from "./mcp";
+import { formatFeatureText, formatSummaryText, getAgentsSnippet, RoadmapService } from "./store";
 import type { FeatureStatus, MilestoneStatus } from "./types";
 
 interface ParsedArgs {
@@ -111,7 +112,7 @@ function printHelp(): void {
   console.log(`project-pulse (pp) v0.1.0 — Repo-native high-level product roadmap
 
 Usage:
-  pp init [--name <name>] [--summary <text>] [--json]
+  pp init [--name <name>] [--summary <text>] [--agents-snippet] [--json]
   pp summary [--milestone <id>] [--status <s>] [--json]
   pp show <feature-id> [--beads] [--json]
   pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
@@ -122,6 +123,7 @@ Usage:
   pp feature note <feature-id> "<message>" [--json]
   pp render [--json]
   pp check [--beads] [--json]
+  pp mcp
   pp --help | --version
 
 Options:
@@ -172,12 +174,24 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           name: getFlag(parsed, "name"),
           summary: getFlag(parsed, "summary"),
         });
+        const includeSnippet = parsed.booleans.has("agents-snippet");
         if (jsonMode) {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(
+            JSON.stringify(
+              includeSnippet ? { ...result, agentsSnippet: getAgentsSnippet() } : result,
+              null,
+              2
+            )
+          );
         } else {
           console.log(
             `${result.created ? "Initialized" : "Updated"} .project-pulse/ for "${result.config.project.name}" and generated ROADMAP.md`
           );
+          if (includeSnippet) {
+            console.log(`\n${getAgentsSnippet()}`);
+          } else {
+            console.log("Tip: run 'pp init --agents-snippet' to print AGENTS.md instructions for AI agents.");
+          }
         }
         return 0;
       }
@@ -388,6 +402,11 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           }
         }
         return result.ok ? 0 : 1;
+      }
+
+      case "mcp": {
+        await runMcpServer(rootDir, beadsClient);
+        return 0;
       }
 
       default:

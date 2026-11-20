@@ -72,6 +72,8 @@ export interface UpdateMilestonePatch {
   description?: string;
 }
 
+export type ShipCriterionInput = string | { id?: string; text: string; done?: boolean };
+
 export interface UpsertFeatureInput {
   id: string;
   title: string;
@@ -81,7 +83,7 @@ export interface UpsertFeatureInput {
   area?: string;
   depends_on?: string[];
   refs?: string[];
-  ship_criteria?: Array<string | ShipCriterion>;
+  ship_criteria?: ShipCriterionInput[];
   description?: string;
 }
 
@@ -94,8 +96,19 @@ export interface UpdateFeaturePatch {
   depends_on?: string[];
   addRefs?: string[];
   removeRefs?: string[];
-  ship_criteria?: Array<string | ShipCriterion>;
+  ship_criteria?: ShipCriterionInput[];
   description?: string;
+}
+
+export interface LogPulseInput {
+  id: string;
+  status?: FeatureStatus;
+  check_criteria?: string[];
+  uncheck_criteria?: string[];
+  toggleCriterionId?: string;
+  done?: boolean;
+  note?: string;
+  at?: string;
 }
 
 export interface MutationResult<T> {
@@ -136,7 +149,7 @@ function slugifyCriterionId(text: string, usedIds: Set<string>, index: number): 
 }
 
 function normalizeCriteriaInput(
-  items: Array<string | ShipCriterion> | undefined
+  items: ShipCriterionInput[] | undefined
 ): ShipCriterion[] {
   if (!items) return [];
   const usedIds = new Set<string>();
@@ -741,6 +754,73 @@ export class RoadmapService {
     return { entity: updated, warnings, roadmapPath };
   }
 
+  logFeaturePulse(input: LogPulseInput): MutationResult<Feature> {
+    assertValidId(input.id, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === input.id);
+    if (!existing) {
+      throw new Error(`Feature '${input.id}' not found`);
+    }
+
+    const resolveCriterionIndex = (key: string): number => {
+      let idx = existing.ship_criteria.findIndex((c) => c.id === key);
+      if (idx === -1 && /^\d+$/.test(key)) {
+        const oneBased = Number.parseInt(key, 10);
+        if (oneBased >= 1 && oneBased <= existing.ship_criteria.length) {
+          idx = oneBased - 1;
+        }
+      }
+      if (idx === -1) {
+        throw new Error(`Ship criterion '${key}' not found on feature '${input.id}'`);
+      }
+      return idx;
+    };
+
+    const nextCriteria = existing.ship_criteria.map((c) => ({ ...c }));
+    for (const key of input.check_criteria ?? []) {
+      const idx = resolveCriterionIndex(key);
+      nextCriteria[idx]!.done = true;
+    }
+    for (const key of input.uncheck_criteria ?? []) {
+      const idx = resolveCriterionIndex(key);
+      nextCriteria[idx]!.done = false;
+    }
+    if (input.toggleCriterionId !== undefined) {
+      const idx = resolveCriterionIndex(input.toggleCriterionId);
+      nextCriteria[idx]!.done =
+        input.done === undefined ? !nextCriteria[idx]!.done : Boolean(input.done);
+    }
+
+    let nextUpdates = [...existing.updates];
+    if (input.note !== undefined) {
+      const trimmed = input.note.trim();
+      if (!trimmed) {
+        throw new Error("Pulse note message must be non-empty");
+      }
+      nextUpdates = [...nextUpdates, { at: input.at ?? new Date().toISOString(), note: trimmed }];
+    }
+
+    const updated: Feature = {
+      ...existing,
+      status: input.status ?? existing.status,
+      ship_criteria: nextCriteria,
+      updates: nextUpdates,
+    };
+
+    const candidateFeatures = [
+      ...loaded.features.filter((f) => f.id !== input.id),
+      updated,
+    ];
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+
+    this.writeFeatureFile(updated);
+    const { roadmapPath } = this.render();
+    return { entity: updated, warnings, roadmapPath };
+  }
+
   render(): { roadmapPath: string; content: string } {
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
@@ -1024,4 +1104,17 @@ export function formatFeatureText(detail: ShowFeatureResult): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Returns an AGENTS.md onboarding snippet describing how AI agents should work with Project Pulse.
+ */
+export function getAgentsSnippet(): string {
+  return `## Project Roadmap (\`project-pulse\` / \`pp\`)
+
+High-level milestones and features live in \`.project-pulse/\` and compile into \`ROADMAP.md\`.
+- **Golden rule:** Never edit \`ROADMAP.md\` or \`.project-pulse/*.md\` by hand — use \`pp\` CLI commands or \`pp mcp\`.
+- **Orient:** Run \`pp summary\` (or \`pp show <feature-id> --beads\`) at session start for strategic context.
+- **Update progress:** Use \`pp feature check <id> <criterion>\`, \`pp feature note <id> "<note>"\`, and \`pp feature update <id> --status <status>\`.
+- **Validate:** Run \`pp check --beads\` before wrapping up to confirm schema integrity and Beads alignment.`;
 }
