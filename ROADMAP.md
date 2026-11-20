@@ -196,7 +196,7 @@ Zero-dependency mouse-and-keyboard terminal dashboard (pp view --tui) with Miles
 
 ### TUI Core Engine & CLI Entrypoint (`tui-core-engine`)
 
-**Status:** `planned` | **Area:** UI | **Depends on:** `dashboard-polish-security`, `cli-core-hardening` | **Refs:** `bd:pp-02n.1`
+**Status:** `in-progress` | **Area:** UI | **Depends on:** `dashboard-polish-security`, `cli-core-hardening` | **Refs:** `bd:pp-02n.1`
 
 Zero-dependency 2D cell-buffer renderer, SGR mouse/key parser, escape sanitizer, OSC 52 copy, and pp view --tui CLI wiring.
 

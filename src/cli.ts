@@ -14,6 +14,7 @@ import {
   getAgentsSnippet,
   RoadmapService,
 } from "./store";
+import { runTui } from "./tui/app";
 import type { FeatureStatus, MilestoneStatus } from "./types";
 import { startViewServer } from "./view";
 
@@ -62,6 +63,7 @@ const BOOLEAN_FLAGS = new Set([
   "no-open",
   "standalone",
   "force",
+  "tui",
   "html",
   "all",
   "with-skill",
@@ -114,7 +116,7 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   "feature remove": { value: [], boolean: ["force"] },
   render: { value: [], boolean: [] },
   check: { value: [], boolean: ["beads"] },
-  view: { value: ["port"], boolean: ["no-open", "standalone"] },
+  view: { value: ["port"], boolean: ["no-open", "standalone", "tui", "no-beads"] },
   export: { value: ["out"], boolean: ["html", "beads"] },
   digest: { value: ["since", "milestone"], boolean: [] },
   changelog: { value: [], boolean: ["all"] },
@@ -258,6 +260,7 @@ Usage:
   pp render [--json]
   pp check [--beads] [--json]
   pp view [--port <n>] [--standalone] [--no-open]
+  pp view --tui [--no-beads]
   pp export --html [--out <path|->] [--beads] [--json]
   pp digest [--since <date|7d|git-ref>] [--milestone <id>] [--json]
   pp changelog [<milestone-id>] [--all] [--json]
@@ -275,6 +278,7 @@ Options:
 export interface CliDependencies {
   beadsClient?: BeadsClient;
   cwd?: string;
+  isTty?: boolean;
 }
 
 export async function runCli(argv: string[], deps: CliDependencies = {}): Promise<number> {
@@ -695,6 +699,31 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
       case "view": {
         if (subcmd !== undefined) {
           throw new Error(`Unexpected argument '${subcmd}' for 'view'`);
+        }
+        const tuiMode = parsed.booleans.has("tui");
+        const noBeads = parsed.booleans.has("no-beads");
+        if (tuiMode) {
+          if (parsed.flags.has("port")) {
+            throw new Error("Flag '--port' cannot be used with '--tui'");
+          }
+          if (parsed.booleans.has("standalone")) {
+            throw new Error("Flag '--standalone' cannot be used with '--tui'");
+          }
+          if (parsed.booleans.has("no-open")) {
+            throw new Error("Flag '--no-open' cannot be used with '--tui'");
+          }
+          if (jsonMode) {
+            throw new Error("Flag '--json' cannot be used with '--tui'");
+          }
+          const hasTty = deps.isTty ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+          if (!hasTty) {
+            throw new Error("pp view --tui requires an interactive TTY terminal");
+          }
+          await runTui(rootDir, { noBeads, beadsClient });
+          return 0;
+        }
+        if (noBeads) {
+          throw new Error("Flag '--no-beads' on 'pp view' is only supported with '--tui'");
         }
         const port = parseOptionalNumber(getFlag(parsed, "port"), "port") ?? 4310;
         const noOpen = parsed.booleans.has("no-open");

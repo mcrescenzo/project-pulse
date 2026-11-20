@@ -3,7 +3,7 @@ id: tui-core-engine
 title: TUI Core Engine & CLI Entrypoint
 milestone: v0.4
 order: 10
-status: planned
+status: in-progress
 area: UI
 depends_on:
   - dashboard-polish-security
