@@ -248,7 +248,7 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
-**Status:** `active` | **Progress:** 2/4 features shipped
+**Status:** `active` | **Progress:** 3/4 features shipped
 
 Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
 
@@ -282,29 +282,33 @@ Audits source code, dependencies, tests, docs, and git history to confirm the re
 
 ### Open-Source Documentation, Licensing & CI (`oss-docs-and-ci`)
 
-**Status:** `in-progress` | **Area:** Docs | **Depends on:** `public-release-security-audit`, `typecheck-baseline` | **Refs:** `bd:pp-4cq.4`
+**Status:** `shipped` | **Area:** Docs | **Depends on:** `public-release-security-audit`, `typecheck-baseline` | **Refs:** `bd:pp-4cq.4`
 
 Adds open-source license, contribution and security policies, polished README with screenshots, and automated GitHub Actions CI.
 
-**Ship Criteria (5/6):**
+**Ship Criteria (6/6):**
 - [x] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
 - [x] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
-- [ ] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
+- [x] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
 - [x] Completes package.json public metadata (license, repository, homepage, bugs, engines, keywords)
 - [x] Replaces stale SPEC.md with docs/architecture.md and generalizes AGENTS.md for contributors
 - [x] Generates CHANGELOG.md via pp changelog --all
 
+> **Latest Pulse (2026-11-20T21:26:28.500Z):** CI green on first push (run 44820193755): typecheck, 60/60 tests with UI tests required (PP_REQUIRE_UI_TESTS=1, none skipped), pp check (pp-4cq.4).
+
 ### Public GitHub Repository Launch (`public-repo-launch`)
 
-**Status:** `planned` | **Area:** Release | **Depends on:** `oss-docs-and-ci` | **Refs:** `bd:pp-4cq.5`, `bd:pp-4cq.6`
+**Status:** `in-progress` | **Area:** Release | **Depends on:** `oss-docs-and-ci` | **Refs:** `bd:pp-4cq.5`, `bd:pp-4cq.6`
 
 Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
 
-**Ship Criteria (0/4):**
+**Ship Criteria (1/4):**
 - [ ] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
-- [ ] Verifies clean fresh clone, test run, and pp view launch from the published repository
+- [x] Verifies clean fresh clone, test run, and pp view launch from the published repository
 - [ ] Switches GitHub repository visibility to public with green CI on main
 - [ ] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
+
+> **Latest Pulse (2026-11-20T21:26:29.312Z):** Private repo mcrescenzo/project-pulse created with topics, wiki/projects off, squash/rebase merges, delete-branch-on-merge; fresh clone passes bun install, typecheck, 60/60 tests, and tokenized pp view (pp-4cq.5). Branch protection and private vulnerability reporting require the public flip.
 
 ## v1.0 — NPM Package Distribution (`v1.0`)
 
