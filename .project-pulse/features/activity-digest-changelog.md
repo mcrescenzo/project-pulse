@@ -3,7 +3,7 @@ id: activity-digest-changelog
 title: Roadmap Activity Digest & Release Changelog
 milestone: v0.3
 order: 30
-status: in-progress
+status: shipped
 area: CLI
 depends_on:
   - cli-core-hardening

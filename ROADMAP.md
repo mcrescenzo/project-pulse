@@ -119,7 +119,7 @@ Hardens localhost mutations against CSRF, makes cards and drawer fully keyboard/
 
 ## v0.3 — Multi-Project Hub & Workflow Views (`v0.3`)
 
-**Status:** `active` | **Progress:** 3/5 features shipped
+**Status:** `active` | **Progress:** 4/5 features shipped
 
 Auto-joining local hub for parallel projects, alternate dashboard views, activity digests, one-command agent repo setup, and static HTML export.
 
@@ -151,7 +151,7 @@ Adds switchable Feature DAG dependency graph and Status Board views alongside th
 
 ### Roadmap Activity Digest & Release Changelog (`activity-digest-changelog`)
 
-**Status:** `in-progress` | **Area:** CLI | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-rrp.4`
+**Status:** `shipped` | **Area:** CLI | **Depends on:** `cli-core-hardening` | **Refs:** `bd:pp-rrp.4`
 
 Compiles concise progress digests and release notes from roadmap updates, shipped features, and git history since a date, tag, or milestone.
 
