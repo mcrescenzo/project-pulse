@@ -34,7 +34,7 @@ function detectDependencyCycles(features: Feature[]): string[][] {
     const feature = byId.get(id);
     if (feature) {
       for (const depId of feature.depends_on) {
-        if (!byId.has(depId)) continue;
+        if (depId === id || !byId.has(depId)) continue;
         const depState = state.get(depId) ?? "unvisited";
         if (depState === "visiting") {
           const idx = stack.indexOf(depId);

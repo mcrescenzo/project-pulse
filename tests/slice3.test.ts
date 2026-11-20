@@ -182,5 +182,29 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
     expect(roadmap).toContain("## v0.1 Foundation (`v0.1`)");
     expect(roadmap).toContain("### MCP API (`mcp-api`)");
     expect(roadmap).toContain("All 6 MCP tools verified");
+
+    // Updating an existing feature via roadmap_upsert_feature preserves prior pulse updates
+    const { createMcpHandler } = await import("../src/mcp");
+    const handler = createMcpHandler(tempDir);
+    const upsertResp = await handler({
+      jsonrpc: "2.0",
+      id: 10,
+      method: "tools/call",
+      params: {
+        name: "roadmap_upsert_feature",
+        arguments: {
+          id: "mcp-api",
+          title: "MCP API v2",
+          milestone: "v0.1",
+          description: "Updated description.",
+        },
+      },
+    });
+    const upsertPayload = JSON.parse(
+      ((upsertResp?.result as { content: Array<{ text: string }> }).content[0]!).text
+    );
+    expect(upsertPayload.feature.title).toBe("MCP API v2");
+    expect(upsertPayload.feature.updates.length).toBe(1);
+    expect(upsertPayload.feature.updates[0].note).toBe("All 6 MCP tools verified");
   });
 });

@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
+import { resolve } from "node:path";
+import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { runMcpServer } from "./mcp";
-import { formatFeatureText, formatSummaryText, getAgentsSnippet, RoadmapService } from "./store";
+import {
+  findProjectRoot,
+  formatFeatureText,
+  formatSummaryText,
+  getAgentsSnippet,
+  RoadmapService,
+} from "./store";
 import type { FeatureStatus, MilestoneStatus } from "./types";
 import { startViewServer } from "./view";
 
@@ -27,8 +35,73 @@ const VALUE_FLAGS = new Set([
   "add-ref",
   "remove-ref",
   "criterion",
+  "add-criterion",
+  "remove-criterion",
+  "reassign",
   "port",
 ]);
+
+const BOOLEAN_FLAGS = new Set([
+  "help",
+  "version",
+  "json",
+  "beads",
+  "no-beads",
+  "done",
+  "undone",
+  "agents-snippet",
+  "no-open",
+  "force",
+]);
+
+const GLOBAL_VALUE_FLAGS = new Set(["root"]);
+const GLOBAL_BOOLEAN_FLAGS = new Set(["help", "version", "json"]);
+
+const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[] }> = {
+  init: { value: ["name", "summary"], boolean: ["agents-snippet"] },
+  summary: { value: ["milestone", "status"], boolean: [] },
+  show: { value: [], boolean: ["beads", "no-beads"] },
+  "milestone add": { value: ["title", "order", "status", "target", "description"], boolean: [] },
+  "milestone update": { value: ["title", "order", "status", "target", "description"], boolean: [] },
+  "milestone remove": { value: ["reassign"], boolean: [] },
+  "feature add": {
+    value: [
+      "title",
+      "milestone",
+      "area",
+      "status",
+      "order",
+      "depends-on",
+      "ref",
+      "criterion",
+      "description",
+    ],
+    boolean: [],
+  },
+  "feature update": {
+    value: [
+      "title",
+      "milestone",
+      "area",
+      "status",
+      "order",
+      "depends-on",
+      "add-ref",
+      "remove-ref",
+      "add-criterion",
+      "remove-criterion",
+      "description",
+    ],
+    boolean: [],
+  },
+  "feature check": { value: [], boolean: ["done", "undone"] },
+  "feature note": { value: [], boolean: [] },
+  "feature remove": { value: [], boolean: ["force"] },
+  render: { value: [], boolean: [] },
+  check: { value: [], boolean: ["beads"] },
+  view: { value: ["port"], boolean: ["no-open"] },
+  mcp: { value: [], boolean: [] },
+};
 
 function parseArgv(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
@@ -46,6 +119,12 @@ function parseArgv(argv: string[]): ParsedArgs {
       if (eqIdx !== -1) {
         const key = token.slice(2, eqIdx);
         const val = token.slice(eqIdx + 1);
+        if (BOOLEAN_FLAGS.has(key)) {
+          throw new Error(`Flag '--${key}' does not take a value`);
+        }
+        if (!VALUE_FLAGS.has(key)) {
+          throw new Error(`Unknown flag '--${key}'`);
+        }
         const arr = flags.get(key) ?? [];
         arr.push(val);
         flags.set(key, arr);
@@ -60,20 +139,51 @@ function parseArgv(argv: string[]): ParsedArgs {
           const arr = flags.get(key) ?? [];
           arr.push(next);
           flags.set(key, arr);
-        } else {
+        } else if (BOOLEAN_FLAGS.has(key)) {
           booleans.add(key);
+        } else {
+          throw new Error(`Unknown flag '--${key}'`);
         }
       }
-    } else if (token === "-h") {
-      booleans.add("help");
-    } else if (token === "-v") {
-      booleans.add("version");
+    } else if (token.startsWith("-") && token.length > 1) {
+      if (token === "-h") {
+        booleans.add("help");
+      } else if (token === "-v") {
+        booleans.add("version");
+      } else {
+        throw new Error(`Unknown flag '${token}'`);
+      }
     } else {
       positionals.push(token);
     }
   }
 
   return { positionals, flags, booleans };
+}
+
+function validateCommandFlags(commandKey: string, parsed: ParsedArgs): void {
+  const allow = COMMAND_FLAG_ALLOWLIST[commandKey];
+  if (!allow) return;
+
+  if (commandKey === "feature update" && parsed.flags.has("criterion")) {
+    throw new Error(
+      "Flag '--criterion' is not supported on 'feature update' (it would overwrite existing criteria). Use '--add-criterion <text>' or '--remove-criterion <id-or-index>'."
+    );
+  }
+
+  const allowedValue = new Set(allow.value);
+  const allowedBool = new Set(allow.boolean);
+
+  for (const flag of parsed.flags.keys()) {
+    if (!GLOBAL_VALUE_FLAGS.has(flag) && !allowedValue.has(flag)) {
+      throw new Error(`Flag '--${flag}' is not supported for '${commandKey}'`);
+    }
+  }
+  for (const flag of parsed.booleans) {
+    if (!GLOBAL_BOOLEAN_FLAGS.has(flag) && !allowedBool.has(flag)) {
+      throw new Error(`Flag '--${flag}' is not supported for '${commandKey}'`);
+    }
+  }
 }
 
 function getFlag(parsed: ParsedArgs, key: string): string | undefined {
@@ -111,18 +221,21 @@ function printWarnings(warnings: Array<{ code: string; message: string }>, jsonM
 }
 
 function printHelp(): void {
-  console.log(`project-pulse (pp) v0.1.0 — Repo-native high-level product roadmap
+  console.log(`project-pulse (pp) v${pkg.version} — Repo-native high-level product roadmap
 
 Usage:
+  pp                                  Run summary if initialized, otherwise show help
   pp init [--name <name>] [--summary <text>] [--agents-snippet] [--json]
   pp summary [--milestone <id>] [--status <s>] [--json]
-  pp show <feature-id> [--beads] [--json]
+  pp show <feature-id> [--beads | --no-beads] [--json]
   pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
   pp milestone update <id> [--title <title>] [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
+  pp milestone remove <id> [--reassign <milestone-id>] [--json]
   pp feature add <id> --title <title> [--milestone <m>] [--area <a>] [--status <s>] [--order <n>] [--depends-on <ids>] [--ref <ref>...] [--criterion <text>...] [--description <md>] [--json]
-  pp feature update <id> [--title <title>] [--status <s>] [--milestone <m>] [--area <a>] [--order <n>] [--depends-on <ids>] [--add-ref <ref>...] [--remove-ref <ref>...] [--description <md>] [--json]
+  pp feature update <id> [--title <title>] [--status <s>] [--milestone <m>] [--area <a>] [--order <n>] [--depends-on <ids>] [--add-ref <ref>...] [--remove-ref <ref>...] [--add-criterion <text>...] [--remove-criterion <id-or-index>...] [--description <md>] [--json]
   pp feature check <feature-id> <criterion-id-or-index> [--done | --undone] [--json]
   pp feature note <feature-id> "<message>" [--json]
+  pp feature remove <id> [--force] [--json]
   pp render [--json]
   pp check [--beads] [--json]
   pp view [--port <n>] [--no-open]
@@ -130,7 +243,7 @@ Usage:
   pp --help | --version
 
 Options:
-  --root <dir>   Target repository root (defaults to current working directory)
+  --root <dir>   Target repository root (defaults to nearest parent with .project-pulse/)
   --json         Output structured JSON
   -h, --help     Show help
   -v, --version  Show version`);
@@ -138,41 +251,99 @@ Options:
 
 export interface CliDependencies {
   beadsClient?: BeadsClient;
+  cwd?: string;
 }
 
 export async function runCli(argv: string[], deps: CliDependencies = {}): Promise<number> {
+  const earlyJson = argv.includes("--json");
   let parsed: ParsedArgs;
   try {
     parsed = parseArgv(argv);
   } catch (error) {
-    console.error(`Error: ${(error as Error).message}`);
+    const message = (error as Error).message;
+    if (earlyJson) {
+      console.log(JSON.stringify({ ok: false, error: message }));
+    } else {
+      console.error(`Error: ${message}`);
+    }
     return 1;
   }
 
   const jsonMode = parsed.booleans.has("json");
-  const rootDir = getFlag(parsed, "root") ?? process.cwd();
 
   if (parsed.booleans.has("version")) {
     if (jsonMode) {
-      console.log(JSON.stringify({ name: "project-pulse", version: "0.1.0" }));
+      console.log(JSON.stringify({ name: "project-pulse", version: pkg.version }));
     } else {
-      console.log("0.1.0");
+      console.log(pkg.version);
     }
     return 0;
   }
 
-  const [cmd, subcmd, ...rest] = parsed.positionals;
-  if (!cmd || parsed.booleans.has("help") || cmd === "help") {
+  const [rawCmd, rawSubcmd, ...rest] = parsed.positionals;
+  if (parsed.booleans.has("help") || rawCmd === "help") {
     printHelp();
     return 0;
   }
 
+  const cwd = deps.cwd ?? process.cwd();
+  const explicitRoot = getFlag(parsed, "root");
+  if (explicitRoot !== undefined && !explicitRoot.trim()) {
+    const message = "Flag --root requires a non-empty directory path";
+    if (jsonMode) {
+      console.log(JSON.stringify({ ok: false, error: message }));
+    } else {
+      console.error(`Error: ${message}`);
+    }
+    return 1;
+  }
+
+  const rootDir = explicitRoot
+    ? resolve(explicitRoot)
+    : rawCmd === "init"
+    ? resolve(cwd)
+    : findProjectRoot(cwd) ?? resolve(cwd);
+
   const service = new RoadmapService(rootDir);
   const beadsClient = deps.beadsClient ?? new CliBeadsClient();
 
+  let cmd = rawCmd;
+  let subcmd = rawSubcmd;
+  if (!cmd) {
+    if (service.isInitialized()) {
+      cmd = "summary";
+      subcmd = undefined;
+    } else {
+      try {
+        validateCommandFlags("summary", parsed);
+      } catch (error) {
+        const message = (error as Error).message;
+        if (jsonMode) {
+          console.log(JSON.stringify({ ok: false, error: message }));
+        } else {
+          console.error(`Error: ${message}`);
+        }
+        return 1;
+      }
+      printHelp();
+      return 0;
+    }
+  }
+
   try {
+    if (cmd === "milestone" || cmd === "feature") {
+      if (subcmd) {
+        validateCommandFlags(`${cmd} ${subcmd}`, parsed);
+      }
+    } else {
+      validateCommandFlags(cmd, parsed);
+    }
+
     switch (cmd) {
       case "init": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'init'`);
+        }
         const result = service.init({
           name: getFlag(parsed, "name"),
           summary: getFlag(parsed, "summary"),
@@ -200,6 +371,9 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
       }
 
       case "summary": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'summary'`);
+        }
         const summary = service.summary({
           milestone: getFlag(parsed, "milestone"),
           status: getFlag(parsed, "status"),
@@ -215,10 +389,18 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
       case "show": {
         const featureId = subcmd;
         if (!featureId) {
-          throw new Error("Usage: pp show <feature-id> [--beads] [--json]");
+          throw new Error("Usage: pp show <feature-id> [--beads | --no-beads] [--json]");
+        }
+        if (rest.length > 0) {
+          throw new Error(`Unexpected argument '${rest[0]}' for 'show'`);
+        }
+        const beadsFlag = parsed.booleans.has("beads");
+        const noBeadsFlag = parsed.booleans.has("no-beads");
+        if (beadsFlag && noBeadsFlag) {
+          throw new Error("Flags --beads and --no-beads are mutually exclusive");
         }
         const detail = await service.showFeature(featureId, {
-          beads: parsed.booleans.has("beads") ? true : undefined,
+          beads: noBeadsFlag ? false : beadsFlag ? true : undefined,
           beadsClient,
         });
         if (jsonMode) {
@@ -233,6 +415,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (subcmd === "add") {
           const id = rest[0];
           if (!id) throw new Error("Usage: pp milestone add <id> --title <title> ...");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'milestone add'`);
           const title = getFlag(parsed, "title");
           if (!title) throw new Error("Missing required flag --title");
           const res = service.upsertMilestone({
@@ -254,6 +437,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (subcmd === "update") {
           const id = rest[0];
           if (!id) throw new Error("Usage: pp milestone update <id> [flags]");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'milestone update'`);
           const res = service.updateMilestone(id, {
             title: getFlag(parsed, "title"),
             order: parseOptionalNumber(getFlag(parsed, "order"), "order"),
@@ -269,13 +453,42 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           }
           return 0;
         }
-        throw new Error(`Unknown milestone subcommand '${subcmd ?? ""}'. Expected: add, update`);
+        if (subcmd === "remove") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp milestone remove <id> [--reassign <milestone-id>] [--json]");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'milestone remove'`);
+          const res = service.removeMilestone(id, { reassignTo: getFlag(parsed, "reassign") });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  milestone: res.entity,
+                  reassignedFeatures: res.reassignedFeatures ?? [],
+                  warnings: res.warnings,
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const suffix =
+              res.reassignedFeatures && res.reassignedFeatures.length > 0
+                ? ` (reassigned ${res.reassignedFeatures.join(", ")})`
+                : "";
+            console.log(`Removed milestone '${res.entity.id}'${suffix} and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+        throw new Error(`Unknown milestone subcommand '${subcmd ?? ""}'. Expected: add, update, remove`);
       }
 
       case "feature": {
         if (subcmd === "add") {
           const id = rest[0];
           if (!id) throw new Error("Usage: pp feature add <id> --title <title> --milestone <m> ...");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'feature add'`);
           const title = getFlag(parsed, "title");
           if (!title) throw new Error("Missing required flag --title");
           const criteria = getFlagAll(parsed, "criterion");
@@ -305,9 +518,11 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (subcmd === "update") {
           const id = rest[0];
           if (!id) throw new Error("Usage: pp feature update <id> [flags]");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'feature update'`);
           const addRefs = getFlagAll(parsed, "add-ref");
           const removeRefs = getFlagAll(parsed, "remove-ref");
-          const criteria = getFlagAll(parsed, "criterion");
+          const addCriteria = getFlagAll(parsed, "add-criterion");
+          const removeCriteria = getFlagAll(parsed, "remove-criterion");
           const res = service.updateFeature(id, {
             title: getFlag(parsed, "title"),
             status: getFlag(parsed, "status") as FeatureStatus | undefined,
@@ -317,7 +532,8 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
             depends_on: parseCsvFlag(parsed, "depends-on"),
             addRefs: addRefs.length > 0 ? addRefs : undefined,
             removeRefs: removeRefs.length > 0 ? removeRefs : undefined,
-            ship_criteria: criteria.length > 0 ? criteria : undefined,
+            addCriteria: addCriteria.length > 0 ? addCriteria : undefined,
+            removeCriteria: removeCriteria.length > 0 ? removeCriteria : undefined,
             description: getFlag(parsed, "description"),
           });
           printWarnings(res.warnings, jsonMode);
@@ -333,6 +549,9 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           const [featureId, criterionKey] = rest;
           if (!featureId || !criterionKey) {
             throw new Error("Usage: pp feature check <feature-id> <criterion-id-or-index> [--done | --undone]");
+          }
+          if (rest.length > 2) {
+            throw new Error(`Unexpected argument '${rest[2]}' for 'feature check'`);
           }
           const doneFlag = parsed.booleans.has("done");
           const undoneFlag = parsed.booleans.has("undone");
@@ -369,12 +588,44 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           return 0;
         }
 
+        if (subcmd === "remove") {
+          const id = rest[0];
+          if (!id) throw new Error("Usage: pp feature remove <id> [--force] [--json]");
+          if (rest.length > 1) throw new Error(`Unexpected argument '${rest[1]}' for 'feature remove'`);
+          const res = service.removeFeature(id, { force: parsed.booleans.has("force") });
+          printWarnings(res.warnings, jsonMode);
+          if (jsonMode) {
+            console.log(
+              JSON.stringify(
+                {
+                  ok: true,
+                  feature: res.entity,
+                  updatedDependents: res.updatedDependents ?? [],
+                  warnings: res.warnings,
+                },
+                null,
+                2
+              )
+            );
+          } else {
+            const suffix =
+              res.updatedDependents && res.updatedDependents.length > 0
+                ? ` (removed dependency from ${res.updatedDependents.join(", ")})`
+                : "";
+            console.log(`Removed feature '${res.entity.id}'${suffix} and updated ROADMAP.md`);
+          }
+          return 0;
+        }
+
         throw new Error(
-          `Unknown feature subcommand '${subcmd ?? ""}'. Expected: add, update, check, note`
+          `Unknown feature subcommand '${subcmd ?? ""}'. Expected: add, update, check, note, remove`
         );
       }
 
       case "render": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'render'`);
+        }
         const result = service.render();
         if (jsonMode) {
           console.log(JSON.stringify({ ok: true, roadmapPath: result.roadmapPath }, null, 2));
@@ -385,6 +636,9 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
       }
 
       case "check": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'check'`);
+        }
         const result = await service.checkWithBeads({
           beads: parsed.booleans.has("beads"),
           beadsClient,
@@ -408,11 +662,17 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
       }
 
       case "mcp": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'mcp'`);
+        }
         await runMcpServer(rootDir, beadsClient);
         return 0;
       }
 
       case "view": {
+        if (subcmd !== undefined) {
+          throw new Error(`Unexpected argument '${subcmd}' for 'view'`);
+        }
         const port = parseOptionalNumber(getFlag(parsed, "port"), "port") ?? 4310;
         const handle = startViewServer(rootDir, { port, beadsClient });
         console.log(`Project Pulse dashboard listening at ${handle.url}`);

@@ -47,8 +47,12 @@ export function parseMarkdownFile(raw: string): ParsedMarkdownFile {
   };
 }
 
+function cleanYamlOutput(rawYaml: string): string {
+  return rawYaml.replace(/^(.*?:)[ \t]+$/gm, "$1").trimEnd();
+}
+
 function serializeYamlFrontmatter(orderedObject: Record<string, unknown>, body: string): string {
-  const yaml = Bun.YAML.stringify(orderedObject, null, 2).trimEnd();
+  const yaml = cleanYamlOutput(Bun.YAML.stringify(orderedObject, null, 2));
   const trimmedBody = body.trim();
   if (!trimmedBody) {
     return `---\n${yaml}\n---\n`;
@@ -75,7 +79,7 @@ export function serializeConfig(config: PulseConfig): string {
       },
     },
   };
-  return `${Bun.YAML.stringify(ordered, null, 2).trimEnd()}\n`;
+  return `${cleanYamlOutput(Bun.YAML.stringify(ordered, null, 2))}\n`;
 }
 
 /**

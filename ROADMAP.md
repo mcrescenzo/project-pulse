@@ -78,15 +78,17 @@ Codebase and UI review fixes: CLI ergonomics, batched Beads resolution, localhos
 
 ### CLI Ergonomics & Core Store Hardening (`cli-core-hardening`)
 
-**Status:** `planned` | **Area:** CLI | **Depends on:** `authoring-cli` | **Refs:** `bd:pp-01q.1`
+**Status:** `in-progress` | **Area:** CLI | **Depends on:** `authoring-cli` | **Refs:** `bd:pp-01q.1`
 
 Upward .project-pulse/ discovery, strict flag parsing, non-destructive criteria edits, default summary, remove commands, clean YAML, and resilient checks.
 
-**Ship Criteria (0/4):**
-- [ ] Discovers .project-pulse/ upward from any nested subdirectory
-- [ ] Rejects unknown CLI flags with clear errors instead of swallowing them
-- [ ] Supports --add-criterion, --remove-criterion, feature/milestone remove, bare pp summary, and --no-beads
-- [ ] Emits whitespace-clean YAML, handles malformed config.yaml in pp check, and deduplicates self-dependency cycle errors
+**Ship Criteria (4/4):**
+- [x] Discovers .project-pulse/ upward from any nested subdirectory
+- [x] Rejects unknown CLI flags with clear errors instead of swallowing them
+- [x] Supports --add-criterion, --remove-criterion, feature/milestone remove, bare pp summary, and --no-beads
+- [x] Emits whitespace-clean YAML, handles malformed config.yaml in pp check, and deduplicates self-dependency cycle errors
+
+> **Latest Pulse (2026-11-20T14:05:52.853Z):** Implemented upward discovery, strict CLI validation, non-destructive criteria edits, entity removal, clean YAML, and resilient checks.
 
 ### Batched & Cached Beads Resolution (`beads-resolution-perf`)
 

@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { CliBeadsClient, evaluateBeadsDrift, extractBeadRefs, type BeadsClient } from "./beads";
 import {
   parseMarkdownFile,
@@ -97,6 +97,8 @@ export interface UpdateFeaturePatch {
   addRefs?: string[];
   removeRefs?: string[];
   ship_criteria?: ShipCriterionInput[];
+  addCriteria?: string[];
+  removeCriteria?: string[];
   description?: string;
 }
 
@@ -115,6 +117,31 @@ export interface MutationResult<T> {
   entity: T;
   warnings: ValidationIssue[];
   roadmapPath: string;
+}
+
+export interface RemoveResult<T> {
+  entity: T;
+  updatedDependents?: string[];
+  reassignedFeatures?: string[];
+  warnings: ValidationIssue[];
+  roadmapPath: string;
+}
+
+/**
+ * Walks up parent directories from `startDir` looking for `.project-pulse/config.yaml`.
+ */
+export function findProjectRoot(startDir: string): string | null {
+  let current = resolve(startDir);
+  while (true) {
+    if (existsSync(join(current, PULSE_DIR_NAME, CONFIG_FILE_NAME))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
 }
 
 function assertValidId(id: string, kind: string): void {
@@ -625,6 +652,26 @@ export class RoadmapService {
     return { entity: updated, warnings, roadmapPath };
   }
 
+  private resolveCriterionIndex(
+    criteria: ShipCriterion[],
+    criterionIdOrIndex: string,
+    featureId: string
+  ): number {
+    let idx = criteria.findIndex((c) => c.id === criterionIdOrIndex);
+    if (idx === -1 && /^\d+$/.test(criterionIdOrIndex)) {
+      const oneBased = Number.parseInt(criterionIdOrIndex, 10);
+      if (oneBased >= 1 && oneBased <= criteria.length) {
+        idx = oneBased - 1;
+      }
+    }
+    if (idx === -1) {
+      throw new Error(
+        `Ship criterion '${criterionIdOrIndex}' not found on feature '${featureId}'`
+      );
+    }
+    return idx;
+  }
+
   updateFeature(id: string, patch: UpdateFeaturePatch): MutationResult<Feature> {
     assertValidId(id, "feature");
     const loaded = this.load();
@@ -636,6 +683,12 @@ export class RoadmapService {
       throw new Error(`Feature '${id}' not found`);
     }
 
+    const hasAddCriteria = Boolean(patch.addCriteria && patch.addCriteria.length > 0);
+    const hasRemoveCriteria = Boolean(patch.removeCriteria && patch.removeCriteria.length > 0);
+    if (patch.ship_criteria !== undefined && (hasAddCriteria || hasRemoveCriteria)) {
+      throw new Error("Cannot combine ship_criteria replacement with addCriteria/removeCriteria");
+    }
+
     let nextRefs = [...existing.refs];
     if (patch.addRefs && patch.addRefs.length > 0) {
       nextRefs = dedupeStrings([...nextRefs, ...patch.addRefs]);
@@ -643,6 +696,31 @@ export class RoadmapService {
     if (patch.removeRefs && patch.removeRefs.length > 0) {
       const toRemove = new Set(patch.removeRefs);
       nextRefs = nextRefs.filter((r) => !toRemove.has(r));
+    }
+
+    let nextCriteria: ShipCriterion[];
+    if (patch.ship_criteria !== undefined) {
+      nextCriteria = normalizeCriteriaInput(patch.ship_criteria);
+    } else {
+      nextCriteria = existing.ship_criteria.map((c) => ({ ...c }));
+      if (hasRemoveCriteria) {
+        const indicesToRemove = new Set<number>();
+        for (const key of patch.removeCriteria!) {
+          indicesToRemove.add(this.resolveCriterionIndex(nextCriteria, key, id));
+        }
+        nextCriteria = nextCriteria.filter((_, idx) => !indicesToRemove.has(idx));
+      }
+      if (hasAddCriteria) {
+        const usedIds = new Set(nextCriteria.map((c) => c.id));
+        for (const rawText of patch.addCriteria!) {
+          const text = rawText.trim();
+          if (!text) {
+            throw new Error("Ship criterion text must be non-empty");
+          }
+          const cid = slugifyCriterionId(text, usedIds, nextCriteria.length);
+          nextCriteria.push({ id: cid, text, done: false });
+        }
+      }
     }
 
     const updated: Feature = {
@@ -655,10 +733,7 @@ export class RoadmapService {
       depends_on:
         patch.depends_on !== undefined ? dedupeStrings(patch.depends_on) : existing.depends_on,
       refs: nextRefs,
-      ship_criteria:
-        patch.ship_criteria !== undefined
-          ? normalizeCriteriaInput(patch.ship_criteria)
-          : existing.ship_criteria,
+      ship_criteria: nextCriteria,
       updates: existing.updates,
       description: patch.description ?? existing.description,
     };
@@ -672,6 +747,114 @@ export class RoadmapService {
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
     return { entity: updated, warnings, roadmapPath };
+  }
+
+  removeFeature(id: string, options: { force?: boolean } = {}): RemoveResult<Feature> {
+    assertValidId(id, "feature");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.features.find((f) => f.id === id);
+    if (!existing) {
+      throw new Error(`Feature '${id}' not found`);
+    }
+
+    const dependents = loaded.features.filter((f) => f.id !== id && f.depends_on.includes(id));
+    if (dependents.length > 0 && !options.force) {
+      throw new Error(
+        `Cannot remove feature '${id}' because other features depend on it (${dependents
+          .map((d) => d.id)
+          .join(", ")}). Re-run with --force to remove those dependency edges.`
+      );
+    }
+
+    const updatedDependents: Feature[] = [];
+    const candidateFeatures: Feature[] = [];
+    for (const f of loaded.features) {
+      if (f.id === id) continue;
+      if (options.force && f.depends_on.includes(id)) {
+        const cleaned = { ...f, depends_on: f.depends_on.filter((d) => d !== id) };
+        updatedDependents.push(cleaned);
+        candidateFeatures.push(cleaned);
+      } else {
+        candidateFeatures.push(f);
+      }
+    }
+
+    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    for (const dep of updatedDependents) {
+      this.writeFeatureFile(dep);
+    }
+    unlinkSync(join(this.featuresDir, `${id}.md`));
+    const { roadmapPath } = this.render();
+
+    return {
+      entity: existing,
+      updatedDependents: updatedDependents.map((d) => d.id),
+      warnings,
+      roadmapPath,
+    };
+  }
+
+  removeMilestone(id: string, options: { reassignTo?: string } = {}): RemoveResult<Milestone> {
+    assertValidId(id, "milestone");
+    const loaded = this.load();
+    if (loaded.parseIssues.length > 0) {
+      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+    }
+    const existing = loaded.milestones.find((m) => m.id === id);
+    if (!existing) {
+      throw new Error(`Milestone '${id}' not found`);
+    }
+
+    const assigned = loaded.features.filter((f) => f.milestone === id);
+    const reassignTo = options.reassignTo?.trim();
+    if (reassignTo) {
+      assertValidId(reassignTo, "milestone");
+      if (reassignTo === id) {
+        throw new Error(`Cannot reassign features to milestone '${id}' being removed`);
+      }
+      const targetExists =
+        loaded.milestones.some((m) => m.id === reassignTo) ||
+        reassignTo === loaded.config.defaults.milestone;
+      if (!targetExists) {
+        throw new Error(`Target milestone '${reassignTo}' not found`);
+      }
+    }
+
+    if (assigned.length > 0 && !reassignTo) {
+      throw new Error(
+        `Cannot remove milestone '${id}' because ${assigned.length} feature(s) reference it (${assigned
+          .map((f) => f.id)
+          .join(", ")}). Re-run with --reassign <milestone-id>.`
+      );
+    }
+
+    const reassignedFeatures: Feature[] = [];
+    const candidateFeatures: Feature[] = loaded.features.map((f) => {
+      if (f.milestone === id && reassignTo) {
+        const updated = { ...f, milestone: reassignTo };
+        reassignedFeatures.push(updated);
+        return updated;
+      }
+      return f;
+    });
+    const candidateMilestones = loaded.milestones.filter((m) => m.id !== id);
+
+    const warnings = this.validateCandidate(loaded.config, candidateMilestones, candidateFeatures);
+    for (const feature of reassignedFeatures) {
+      this.writeFeatureFile(feature);
+    }
+    unlinkSync(join(this.milestonesDir, `${id}.md`));
+    const { roadmapPath } = this.render();
+
+    return {
+      entity: existing,
+      reassignedFeatures: reassignedFeatures.map((f) => f.id),
+      warnings,
+      roadmapPath,
+    };
   }
 
   checkFeatureCriterion(
@@ -689,18 +872,11 @@ export class RoadmapService {
       throw new Error(`Feature '${featureId}' not found`);
     }
 
-    let targetIndex = existing.ship_criteria.findIndex((c) => c.id === criterionIdOrIndex);
-    if (targetIndex === -1 && /^\d+$/.test(criterionIdOrIndex)) {
-      const oneBased = Number.parseInt(criterionIdOrIndex, 10);
-      if (oneBased >= 1 && oneBased <= existing.ship_criteria.length) {
-        targetIndex = oneBased - 1;
-      }
-    }
-    if (targetIndex === -1) {
-      throw new Error(
-        `Ship criterion '${criterionIdOrIndex}' not found on feature '${featureId}'`
-      );
-    }
+    const targetIndex = this.resolveCriterionIndex(
+      existing.ship_criteria,
+      criterionIdOrIndex,
+      featureId
+    );
 
     const updatedCriteria = existing.ship_criteria.map((c, idx) =>
       idx === targetIndex ? { ...c, done: done === undefined ? !c.done : done } : c
@@ -765,31 +941,21 @@ export class RoadmapService {
       throw new Error(`Feature '${input.id}' not found`);
     }
 
-    const resolveCriterionIndex = (key: string): number => {
-      let idx = existing.ship_criteria.findIndex((c) => c.id === key);
-      if (idx === -1 && /^\d+$/.test(key)) {
-        const oneBased = Number.parseInt(key, 10);
-        if (oneBased >= 1 && oneBased <= existing.ship_criteria.length) {
-          idx = oneBased - 1;
-        }
-      }
-      if (idx === -1) {
-        throw new Error(`Ship criterion '${key}' not found on feature '${input.id}'`);
-      }
-      return idx;
-    };
-
     const nextCriteria = existing.ship_criteria.map((c) => ({ ...c }));
     for (const key of input.check_criteria ?? []) {
-      const idx = resolveCriterionIndex(key);
+      const idx = this.resolveCriterionIndex(existing.ship_criteria, key, input.id);
       nextCriteria[idx]!.done = true;
     }
     for (const key of input.uncheck_criteria ?? []) {
-      const idx = resolveCriterionIndex(key);
+      const idx = this.resolveCriterionIndex(existing.ship_criteria, key, input.id);
       nextCriteria[idx]!.done = false;
     }
     if (input.toggleCriterionId !== undefined) {
-      const idx = resolveCriterionIndex(input.toggleCriterionId);
+      const idx = this.resolveCriterionIndex(
+        existing.ship_criteria,
+        input.toggleCriterionId,
+        input.id
+      );
       nextCriteria[idx]!.done =
         input.done === undefined ? !nextCriteria[idx]!.done : Boolean(input.done);
     }
@@ -834,8 +1000,7 @@ export class RoadmapService {
     };
   }
 
-  check(): CheckResult {
-    const loaded = this.load();
+  protected checkLoaded(loaded: LoadedStore): CheckResult {
     const expectedRoadmapMd = renderRoadmapMarkdown(
       loaded.config,
       loaded.milestones,
@@ -865,12 +1030,54 @@ export class RoadmapService {
     };
   }
 
+  check(): CheckResult {
+    if (!this.isInitialized()) {
+      return {
+        ok: false,
+        errors: [
+          {
+            level: "error",
+            code: "NOT_INITIALIZED",
+            message: `Project Pulse is not initialized in ${this.rootDir} (missing ${PULSE_DIR_NAME}/${CONFIG_FILE_NAME}). Run 'pp init' first.`,
+          },
+        ],
+        warnings: [],
+      };
+    }
+
+    let loaded: LoadedStore;
+    try {
+      loaded = this.load();
+    } catch (error) {
+      return {
+        ok: false,
+        errors: [
+          {
+            level: "error",
+            code: "CONFIG_PARSE_ERROR",
+            message: (error as Error).message,
+          },
+        ],
+        warnings: [],
+      };
+    }
+
+    return this.checkLoaded(loaded);
+  }
+
   async checkWithBeads(options: {
     beads?: boolean;
     beadsClient?: BeadsClient;
   } = {}): Promise<CheckResult> {
     const base = this.check();
     if (!options.beads) {
+      return base;
+    }
+    if (
+      base.errors.some(
+        (e) => e.code === "NOT_INITIALIZED" || e.code === "CONFIG_PARSE_ERROR"
+      )
+    ) {
       return base;
     }
 

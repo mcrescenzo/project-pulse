@@ -1,3 +1,4 @@
+import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { formatFeatureText, formatSummaryText, RoadmapService } from "./store";
 import type { FeatureStatus, MilestoneStatus } from "./types";
@@ -310,7 +311,7 @@ export function createMcpHandler(
               },
               serverInfo: {
                 name: "project-pulse",
-                version: "0.1.0",
+                version: pkg.version,
               },
             },
           };
