@@ -123,10 +123,19 @@ Security and privacy audit, open-source documentation and CI, and public GitHub 
   - [x] Documents audit checklist results and resolves all high/medium findings
   - [x] Rewrites git history to the GitHub noreply identity and pins the repo-local author email
   - [x] Hardens view and hub servers with Host validation on all routes, a local access secret, and anti-framing headers
-
-### In Progress / Planned
-- **Open-Source Documentation, Licensing & CI** (`oss-docs-and-ci`) [planned]
-- **Public GitHub Repository Launch** (`public-repo-launch`) [planned]
+- **Open-Source Documentation, Licensing & CI** (`oss-docs-and-ci`) — *Docs · bd:pp-4cq.4*
+  - Adds open-source license, contribution and security policies, polished README with screenshots, and automated GitHub Actions CI.
+  - [x] Adds MIT LICENSE, CONTRIBUTING.md, and SECURITY.md tailored to Project Pulse
+  - [x] Polishes README.md with quickstart, CLI/MCP usage, and up-to-date dashboard screenshots
+  - [x] Adds GitHub Actions CI workflow running tests, typechecks, and pp check on PRs and main
+  - [x] Completes package.json public metadata (license, repository, homepage, bugs, engines, keywords)
+  - [x] Replaces stale SPEC.md with docs/architecture.md and generalizes AGENTS.md for contributors
+  - [x] Generates CHANGELOG.md via pp changelog --all
+- **Public GitHub Repository Launch** (`public-repo-launch`) — *Release · bd:pp-4cq.5, bd:pp-4cq.6*
+  - Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
+  - [x] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
+  - [x] Verifies clean fresh clone, test run, and pp view launch from the published repository
+  - [x] Switches GitHub repository visibility to public with green CI on main
 
 ## v1.0 — NPM Package Distribution
 

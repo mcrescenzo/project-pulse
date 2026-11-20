@@ -248,7 +248,7 @@ Responsive split/modal Feature Detail Drawer with criteria/status/note persisten
 
 ## v0.5 — Open-Source Public Release (`v0.5`)
 
-**Status:** `active` | **Progress:** 3/4 features shipped
+**Status:** `shipped` | **Progress:** 4/4 features shipped
 
 Security and privacy audit, open-source documentation and CI, and public GitHub repository launch.
 
@@ -298,17 +298,17 @@ Adds open-source license, contribution and security policies, polished README wi
 
 ### Public GitHub Repository Launch (`public-repo-launch`)
 
-**Status:** `in-progress` | **Area:** Release | **Depends on:** `oss-docs-and-ci` | **Refs:** `bd:pp-4cq.5`, `bd:pp-4cq.6`
+**Status:** `shipped` | **Area:** Release | **Depends on:** `oss-docs-and-ci` | **Refs:** `bd:pp-4cq.5`, `bd:pp-4cq.6`
 
 Publishes the audited repository to GitHub with clean metadata, branch protection, issue templates, and public visibility.
 
-**Ship Criteria (1/4):**
-- [ ] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
+**Ship Criteria (3/4):**
+- [x] Configures GitHub remote, repo metadata/topics, issue templates, and main branch protection
 - [x] Verifies clean fresh clone, test run, and pp view launch from the published repository
-- [ ] Switches GitHub repository visibility to public with green CI on main
+- [x] Switches GitHub repository visibility to public with green CI on main
 - [ ] Bumps to 0.5.0, tags v0.5.0, and publishes a GitHub Release from pp changelog v0.5
 
-> **Latest Pulse (2026-11-20T21:26:29.312Z):** Private repo mcrescenzo/project-pulse created with topics, wiki/projects off, squash/rebase merges, delete-branch-on-merge; fresh clone passes bun install, typecheck, 60/60 tests, and tokenized pp view (pp-4cq.5). Branch protection and private vulnerability reporting require the public flip.
+> **Latest Pulse (2026-11-20T21:33:07.163Z):** Repository made public with green CI on main and PRs; main protected (required CI check, linear history, no force-push/deletion); private vulnerability reporting enabled; v0.5.0 tagged and released (pp-4cq.6).
 
 ## v1.0 — NPM Package Distribution (`v1.0`)
 
