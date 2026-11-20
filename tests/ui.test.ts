@@ -159,7 +159,8 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
   test("switches between Cards, Dependency Graph, and Status Board views with shared filters and DAG highlight", async () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "View Modes App" });
-    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Foundation", status: "active", order: 10 });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Foundation", status: "shipped", order: 10 });
+    svc.upsertMilestone({ id: "v0.2", title: "v0.2 Next", status: "planned", order: 20 });
     svc.addFeature({
       id: "node-a",
       title: "Base Store",
@@ -170,7 +171,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     svc.addFeature({
       id: "node-b",
       title: "Query Engine",
-      milestone: "v0.1",
+      milestone: "v0.2",
       status: "in-progress",
       area: "Core",
       depends_on: ["node-a"],
@@ -178,7 +179,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     svc.addFeature({
       id: "node-c",
       title: "Dashboard View",
-      milestone: "v0.1",
+      milestone: "v0.2",
       status: "planned",
       area: "UI",
       depends_on: ["node-b"],
@@ -186,7 +187,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     svc.addFeature({
       id: "node-d",
       title: "Docs Polish",
-      milestone: "v0.1",
+      milestone: "v0.2",
       status: "planned",
       area: "Docs",
     });
@@ -204,6 +205,14 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
 
       await page.goto(handle.url, { waitUntil: "networkidle" });
       await page.waitForSelector('.card[data-feature-id="node-a"]');
+
+      // Filtering by "planned" hides milestones with no matching features
+      expect(await page.locator("section.milestone").count()).toBe(2);
+      await page.locator("#filter-status").selectOption("planned");
+      expect(await page.locator("section.milestone").count()).toBe(1);
+      expect(await page.locator("section.milestone h2").textContent()).toBe("v0.2 Next");
+      await page.locator("#filter-reset").click();
+      expect(await page.locator("section.milestone").count()).toBe(2);
 
       // Switch to Dependency Graph view
       await page.locator("#tab-graph").click();

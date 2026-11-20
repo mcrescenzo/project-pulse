@@ -1107,7 +1107,10 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     function renderCardsView(container, data, visibleMilestones) {
       const q = state.search.trim().toLowerCase();
       if (visibleMilestones.length === 0) {
-        container.innerHTML = '<p class="empty-msg">No milestones match the active filter.</p>';
+        const msg = state.statusFilter || state.areaFilter || q
+          ? "No features match the active filter."
+          : "No milestones match the active filter.";
+        container.innerHTML = '<p class="empty-msg">' + msg + "</p>";
         return;
       }
 
@@ -1702,16 +1705,23 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       areaSel.value = currentA;
 
       const q = state.search.trim().toLowerCase();
-      const hasActiveFilters = Boolean(state.milestoneFilter || state.statusFilter || state.areaFilter || q);
+      const hasFeatureFilter = Boolean(state.statusFilter || state.areaFilter || q);
+      const hasActiveFilters = Boolean(state.milestoneFilter || hasFeatureFilter);
       const resetBtn = document.getElementById("filter-reset");
       if (resetBtn) resetBtn.hidden = !hasActiveFilters;
 
-      const visibleMilestones = data.milestones.filter((m) => !state.milestoneFilter || m.id === state.milestoneFilter);
       const filteredFeatures = data.features.filter((f) => {
         if (state.milestoneFilter && f.milestone !== state.milestoneFilter) return false;
         if (state.statusFilter && f.status !== state.statusFilter) return false;
         if (state.areaFilter && f.area !== state.areaFilter) return false;
         if (q && !(f.title.toLowerCase().includes(q) || f.id.toLowerCase().includes(q) || (f.description || "").toLowerCase().includes(q))) return false;
+        return true;
+      });
+
+      const matchedMilestoneIds = new Set(filteredFeatures.map((f) => f.milestone));
+      const visibleMilestones = data.milestones.filter((m) => {
+        if (state.milestoneFilter && m.id !== state.milestoneFilter) return false;
+        if (hasFeatureFilter && !matchedMilestoneIds.has(m.id)) return false;
         return true;
       });
 
