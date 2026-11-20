@@ -1,0 +1,9 @@
+version: 1
+project: 
+  name: Project Pulse
+  summary: Repo-native high-level product roadmap for developers and AI agents.
+defaults: 
+  milestone: backlog
+integrations: 
+  beads: 
+    enabled: true
