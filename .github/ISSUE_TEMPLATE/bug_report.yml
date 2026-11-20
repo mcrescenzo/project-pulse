@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in pp / project-pulse is broken or behaves unexpectedly
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the exact command you ran and the output or error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal `.project-pulse/` setup or command sequence is ideal.
+  - type: input
+    id: version
+    attributes:
+      label: Project Pulse version
+      description: Output of `pp --version` (or the commit SHA).
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Bun version (`bun --version`), terminal (for TUI issues), browser (for dashboard issues).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [CLI, MCP server, Browser dashboard / hub, Terminal UI, Export / digest / changelog, Beads integration, Docs, Other]

@@ -1,22 +1,53 @@
 # Project Pulse (`project-pulse` / `pp`)
 
-A repo-native, high-level product roadmap for developers and AI coding agents.
+[![CI](https://github.com/mcrescenzo/project-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/mcrescenzo/project-pulse/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Project Pulse keeps strategic milestones and core capabilities in atomic Markdown files under `.project-pulse/`, compiles a deterministic root `ROADMAP.md` on every change, exposes a CLI (`project-pulse` / `pp`) and stdio MCP server (`pp mcp`), provides optional read-only Beads (`bd`) drift detection, and serves both a live-reloading browser dashboard (`pp view`) and an interactive terminal dashboard (`pp view --tui`).
+**A high-level product roadmap that lives in your repository, built for developers and AI coding agents.**
 
-## Quick Start
+Planning tends to end up either buried in granular task trackers or in a hand-maintained `ROADMAP.md` that quickly goes stale. Project Pulse keeps milestones and features as small Markdown files under `.project-pulse/`, and regenerates a deterministic `ROADMAP.md` on every change. You can work with the same roadmap through:
 
-Requires [Bun](https://bun.sh/) (`1.3+`).
+- a CLI (`pp`)
+- an MCP server for agents (`pp mcp`)
+- a live browser dashboard (`pp view`)
+- a mouse-friendly terminal dashboard (`pp view --tui`)
+
+![Milestone cards view of the Project Pulse dashboard](docs/images/dashboard-cards.png)
+
+<table>
+  <tr>
+    <td><img src="docs/images/dashboard-graph.png" alt="Dependency graph view with upstream and downstream tracing" /></td>
+    <td><img src="docs/images/dashboard-board.png" alt="Status board view" /></td>
+  </tr>
+</table>
+
+## Features
+
+- **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server.
+- **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
+- **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
+- **Agent-ready:** token-lean `pp summary`, `--json` on every command, a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
+- **Dashboards:** a multi-project local hub with cards, dependency graph, and status board views, plus live reload and quick actions. There's also a TUI for SSH and tmux.
+- **Reporting:** `pp digest` for recent activity, `pp changelog` for release notes, and `pp export --html` for a self-contained offline snapshot.
+- **Optional [Beads](https://github.com/steveyegge/beads) integration:** link features to `bd:<id>` issues to see their live status and detect drift. Read-only, and entirely optional.
+
+## Install
+
+Project Pulse runs on [Bun](https://bun.sh/) **1.3+**. npm distribution is planned for v1.0.
 
 ```bash
-# Link the 'project-pulse' and 'pp' binaries locally (optional)
-bun link
-
-# Or run directly via Bun
-bun run src/cli.ts --help
+git clone https://github.com/mcrescenzo/project-pulse.git
+cd project-pulse
+bun install        # dev/test dependencies only; the CLI has no runtime dependencies
+bun link           # puts `pp` and `project-pulse` on your PATH
+pp --version
 ```
 
-Initialize a repository roadmap:
+You can also skip linking and run it in place with `bun run /path/to/project-pulse/src/cli.ts <command>`.
+
+## Quick start
+
+From the root of any repository:
 
 ```bash
 pp init --name "My Project" --summary "High-level roadmap."
@@ -24,62 +55,115 @@ pp milestone add v0.1 --title "v0.1 — Core Foundation" --status active --targe
 pp feature add offline-sync --title "Offline-First Sync" --milestone v0.1 --area Core \
   --criterion "Queue local changes offline" \
   --criterion "Reconcile cleanly on reconnect"
+
+pp summary                                   # orient
+pp feature check offline-sync 1              # tick a ship criterion
+pp feature note offline-sync "Queue landed"  # log progress
+pp view                                      # open the live dashboard
 ```
 
-## Core Commands
+`pp init` won't overwrite an existing hand-written `ROADMAP.md`. Move it aside, or pass `--force`.
+
+## Commands
 
 | Command | Description |
 | :--- | :--- |
-| `pp` | Run `summary` if initialized, otherwise show help. |
-| `pp init [--name <name>] [--agents-snippet]` | Scaffold `.project-pulse/`, generate `ROADMAP.md`, and optionally print `AGENTS.md` guidance. |
-| `pp setup [--mcp <path>] [--with-skill] [--dry-run]` | Idempotently wire `AGENTS.md` instructions, MCP server config, and optional `SKILL.md` template. |
-| `pp summary [--milestone <id>] [--status <s>] [--json]` | Token-lean overview of milestones, features, criteria progress, and latest pulse notes. |
-| `pp show <feature-id> [--beads \| --no-beads] [--json]` | Inspect one feature's description, criteria, dependencies, update log, and linked `bd:*` issues. |
-| `pp milestone add\|update\|remove <id> ...` | Create, update, or remove (with `--reassign`) a release milestone and regenerate `ROADMAP.md`. |
-| `pp feature add\|update\|remove <id> ...` | Create, update (`--add-criterion` / `--remove-criterion`), or remove (`--force`) a feature and regenerate `ROADMAP.md`. |
-| `pp feature check <feature-id> <criterion> [--done\|--undone]` | Toggle or set a ship criterion checkbox and regenerate `ROADMAP.md`. |
-| `pp feature note <feature-id> "<message>"` | Append a timestamped pulse update and regenerate `ROADMAP.md`. |
-| `pp digest [--since <date\|7d\|git-ref>] [--milestone <id>]` | Compile recent progress across shipped features, status movement, criteria, and notes. |
-| `pp changelog [<milestone-id>] [--all] [--json]` | Generate Markdown release notes for a milestone or the entire roadmap. |
-| `pp export --html [--out <path\|->] [--beads]` | Write a deterministic, zero-network standalone HTML roadmap snapshot. |
-| `pp check [--beads] [--json]` | Validate schema integrity, dependency DAG, `ROADMAP.md` sync, and optional Beads drift. |
-| `pp render` | Deterministically recompile `.project-pulse/` into `ROADMAP.md`. |
-| `pp view [--port <n>] [--standalone] [--no-open]` | Start or join the auto-joining multi-project local hub (`/`, `/p/<slug>`), or run an isolated standalone server. |
-| `pp view --tui [--no-beads]` | Launch the mouse-and-keyboard interactive terminal dashboard over SSH or local TTY. |
-| `pp mcp` | Start the stdio Model Context Protocol (MCP) server. |
+| `pp` | Runs `summary` if the repo is initialized, otherwise shows help. |
+| `pp init [--name <name>] [--summary <text>] [--agents-snippet] [--force]` | Creates `.project-pulse/` and generates `ROADMAP.md`. |
+| `pp setup [--mcp <path>] [--with-skill] [--dry-run]` | Idempotently wires up `AGENTS.md` instructions, MCP server config, and an optional agent skill file. |
+| `pp summary [--milestone <id>] [--status <s>] [--json]` | Token-lean overview of milestones, features, criteria progress, and latest notes. |
+| `pp show <feature-id> [--beads \| --no-beads] [--json]` | One feature in full: description, criteria, dependencies, update log, linked issues. |
+| `pp milestone add\|update\|remove <id> ...` | Manage release milestones. |
+| `pp feature add\|update\|remove <id> ...` | Manage features (`--add-criterion`, `--remove-criterion`, `--depends-on`, `--add-ref`, …). |
+| `pp feature check <feature-id> <criterion> [--done\|--undone]` | Toggles or sets a ship criterion. |
+| `pp feature note <feature-id> "<message>"` | Appends a timestamped progress note. |
+| `pp digest [--since <date\|7d\|git-ref>] [--milestone <id>]` | Recent progress: shipped features, status changes, criteria, notes. |
+| `pp changelog [<milestone-id>] [--all]` | Markdown release notes for one milestone or the whole roadmap. |
+| `pp export --html [--out <path\|->] [--beads]` | Self-contained, zero-network HTML snapshot. |
+| `pp check [--beads] [--json]` | Validates schema, dependency DAG, `ROADMAP.md` sync, and optionally Beads drift. |
+| `pp render` | Regenerates `ROADMAP.md`. |
+| `pp view [--port <n>] [--standalone] [--no-open]` | Starts or joins the local multi-project dashboard hub. |
+| `pp view --tui [--no-beads]` | Interactive terminal dashboard. |
+| `pp mcp` | Stdio MCP server. |
 
-## Terminal Dashboard (`pp view --tui`)
+Every command accepts `--root <dir>` (default: the nearest parent directory containing `.project-pulse/`), and most accept `--json`.
 
-Run the terminal UI inside any initialized repository (ideal over SSH or `tmux`):
+## Browser dashboard (`pp view`)
+
+`pp view` starts a local hub on `http://127.0.0.1:4310`, or joins one that's already running, and opens your project at `/p/<repo>`. Run it in several repositories and they all appear on the hub's overview page. `--standalone` runs a single-project server instead.
+
+The dashboard is protected by an **access token**:
+- `pp view` prints and opens a URL ending in `?t=<token>`.
+- Your browser exchanges that token for a session cookie, so bookmarks keep working afterwards.
+- With `--no-open`, copy the printed URL into your browser.
+- The token is stored at `~/.config/project-pulse/access-token` (mode 0600). Set `PROJECT_PULSE_HOME` to use a different directory, and delete the file to rotate the token.
+
+See [SECURITY.md](SECURITY.md) for the full model.
+
+## Terminal dashboard (`pp view --tui`)
 
 ```bash
 pp view --tui [--no-beads]
 ```
 
-- **Views & Filters:** Click tabs or press `1` (**Milestone Cards**), `2` (**Dependency Graph**), or `3` (**Status Board**); click filter pills (`M:`, `S:`, `A:`), press `/` for live search, or click `Reset`.
-- **Waterfall Graph:** Top-to-bottom dependency DAG with **3 zoom densities** (`Full`, `Compact`, `Overview/Fit` via wheel, `+`/`-`, `0`, `F`, or toolbar buttons) and **click-and-drag** panning. Mouse tracking and hover tracing are ON by default in Graph view (hover traces amber upstream / green downstream, click opens the drawer; press `h` or click `Hover:ON` to switch to click-1 trace / click-2 open).
-- **Interactive Drawer:** Opens as a right split-pane on wide terminals (`>= 120` cols) or centered modal on narrow panes (`< 120` cols). Update feature status, toggle ship criteria (`Space` or click), and log pulse notes (`n` + `Enter`) with automatic `.project-pulse/` + `ROADMAP.md` persistence and live `fs.watch` reload.
-- **SSH Ergonomics:** Press `m` to toggle SGR mouse capture off/on for native terminal drag-selection, `y` to copy the active feature ID via OSC 52, `?` for shortcuts, and `q` to restore your terminal cleanly.
+- **Views and filters:** click the tabs, or press `1` (Milestone Cards), `2` (Dependency Graph), or `3` (Status Board).
+  - Click the filter pills (`M:`, `S:`, `A:`), press `/` for live search, or click `Reset`.
+- **Waterfall graph:** a top-to-bottom dependency DAG.
+  - Three zoom densities: use the mouse wheel, `+`/`-`, `0`, `F`, or the toolbar buttons.
+  - Click and drag to pan.
+  - Hovering traces upstream dependencies in amber and downstream ones in green; clicking opens the drawer. Press `h` to switch to click-to-trace.
+- **Detail drawer:** shows as a split pane on terminals at least 120 columns wide, and as a modal on narrower ones.
+  - Change the status, toggle criteria (`Space`), and add notes (`n`, then `Enter`).
+  - Changes are saved immediately and reload live.
+- **SSH ergonomics:**
+  - `m` toggles mouse capture, so you can select text natively.
+  - `y` copies the feature id via OSC 52.
+  - `?` shows the shortcuts.
+  - `q` quits and restores your terminal.
 
-## MCP Server Configuration
+## AI agents and MCP
 
-Configure `pp mcp` in your agent's MCP client config:
+The quickest way to wire up an agent:
+
+```bash
+pp setup --mcp .mcp.json          # adds an AGENTS.md block and an MCP server entry (merged, idempotent)
+```
+
+Or configure the MCP server yourself:
 
 ```json
 {
   "mcpServers": {
-    "project-pulse": {
-      "command": "pp",
-      "args": ["mcp"]
-    }
+    "project-pulse": { "command": "pp", "args": ["mcp"] }
   }
 }
 ```
 
-Exposed MCP tools: `roadmap_summary`, `roadmap_show_feature`, `roadmap_upsert_milestone`, `roadmap_upsert_feature`, `roadmap_log_pulse`, and `roadmap_check`.
+If `pp` isn't on your PATH, use `"command": "bun", "args": ["run", "/path/to/project-pulse/src/cli.ts", "mcp"]`.
 
-## Validation
+MCP tools: `roadmap_summary`, `roadmap_show_feature`, `roadmap_upsert_milestone`, `roadmap_upsert_feature`, `roadmap_log_pulse`, `roadmap_check`.
+
+## Beads integration (optional)
+
+If you track tasks with [Beads](https://github.com/steveyegge/beads), add refs such as `--add-ref bd:proj-42` to a feature. The `pp show`, `pp check --beads`, and dashboard views then show each issue's live status and flag drift, for example a shipped feature with open issues. Project Pulse only reads from `bd` and never writes to it. Without Beads installed, everything else works the same. To turn the integration off, set `integrations.beads.enabled: false` in `.project-pulse/config.yaml`.
+
+## Documentation
+
+- [Architecture and store schema](docs/architecture.md)
+- [Security policy](SECURITY.md) and the [v0.5 security audit](docs/security-audit.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md), plus this project's own roadmap: [ROADMAP.md](ROADMAP.md)
+
+## Development
 
 ```bash
+bun install
+bun run typecheck
 bun test
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the browser UI test setup and project conventions.
+
+## License
+
+[MIT](LICENSE) © 2026 Michael Crescenzo
