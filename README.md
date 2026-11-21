@@ -106,6 +106,15 @@ See [SECURITY.md](SECURITY.md) for the full model.
 pp view --tui [--no-beads]
 ```
 
+![Milestone cards view and split detail drawer in the Project Pulse terminal dashboard](docs/images/tui-cards.png)
+
+<table>
+  <tr>
+    <td><img src="docs/images/tui-graph.png" alt="Terminal waterfall dependency graph with upstream and downstream tracing" /></td>
+    <td><img src="docs/images/tui-board.png" alt="Terminal status board view" /></td>
+  </tr>
+</table>
+
 - **Views and filters:** click the tabs, or press `1` (Milestone Cards), `2` (Dependency Graph), or `3` (Status Board).
   - Click the filter pills (`M:`, `S:`, `A:`), press `/` for live search, or click `Reset`.
 - **Waterfall graph:** a top-to-bottom dependency DAG.
