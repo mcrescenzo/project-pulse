@@ -3,7 +3,7 @@ id: node-runtime-portability
 title: Node.js 24+ & Bun Dual-Runtime Portability
 milestone: v1.0
 order: 10
-status: in-progress
+status: shipped
 area: Core
 depends_on:
   - cli-core-hardening
@@ -12,7 +12,7 @@ refs: []
 ship_criteria:
   - id: preserves-fast-startup-and
     text: Preserves fast startup and clean zero-bloat dependency footprint
-    done: false
+    done: true
   - id: replaces-bun-yaml-bun
     text: Replaces Bun.YAML, Bun.serve, and Bun.spawn/Bun.stdin with portable
       Node.js 24+ APIs and a lightweight YAML parser
@@ -34,5 +34,12 @@ updates:
       50.3ms (--version) / 73.5ms (summary); bun dist/cli.js 30.3/55.2 (faster
       than source, no regression); node dist 66.3/86.6. Anchors consult current
       source."
+  - at: 2026-11-23T19:35:11.612Z
+    note: "Startup/footprint closure: bun dist/cli.js medians 30.3ms --version /
+      55.2ms summary vs source 50.3/73.5 (Bun 1.3.9, same session, 30 runs/5
+      warmups); node dist 66.3/86.6 on Node 26.13.1 with 24.0.0 floor proven in
+      CI. Bundle 668,568 bytes; tarball 151,290 bytes; zero install-time
+      dependencies, packages, or postinstall steps (yaml@2.9.1 +
+      string-width@8.1.0 bundled from exact devDependencies)."
 ---
 Replaces Bun-only runtime calls (Bun.YAML, Bun.serve, Bun.spawn/stdin) with portable Node.js 24+ APIs and a lightweight YAML library while retaining full Bun support.
