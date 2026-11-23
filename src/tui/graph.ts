@@ -352,6 +352,280 @@ interface EdgeCell {
   style: CellStyle;
 }
 
+interface RouteCell {
+  /** World-space column; routes are computed once per layout so their shape holds under pan/zoom. */
+  x: number;
+  /** World-space row. */
+  y: number;
+  mask: number;
+  arrow: boolean;
+}
+
+interface RoutePoint {
+  x: number;
+  y: number;
+}
+
+const EMPTY_ROUTE_CELLS: RouteCell[] = [];
+
+/**
+ * Rasterizes an axis-aligned world-space polyline into edge cells. Consecutive duplicate
+ * points collapse first, so zero-length segments are impossible by construction and every
+ * loop terminates. The start cell joins upward into the parent node unless the route
+ * immediately jogs aside (dodges), which turns it into a corner glyph.
+ */
+function rasterizeRoute(points: RoutePoint[], cornerAtStart: boolean): RouteCell[] {
+  const pts: RoutePoint[] = [];
+  for (const point of points) {
+    const prev = pts[pts.length - 1];
+    if (!prev || prev.x !== point.x || prev.y !== point.y) pts.push(point);
+  }
+  const cells: RouteCell[] = [];
+  if (pts.length === 1) {
+    const only = pts[0]!;
+    cells.push({ x: only.x, y: only.y, mask: BIT_N, arrow: true });
+    return cells;
+  }
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const from = pts[i]!;
+    const to = pts[i + 1]!;
+    const dx = Math.sign(to.x - from.x);
+    const dy = Math.sign(to.y - from.y);
+    const outDir = dx > 0 ? BIT_E : dx < 0 ? BIT_W : dy > 0 ? BIT_S : BIT_N;
+    const backDir = dy > 0 ? BIT_N : dy < 0 ? BIT_S : dx > 0 ? BIT_W : BIT_E;
+    if (i === 0) {
+      cells.push({ x: from.x, y: from.y, mask: cornerAtStart ? outDir : BIT_N | outDir, arrow: false });
+    } else {
+      const prev = pts[i - 1]!;
+      const inDx = Math.sign(from.x - prev.x);
+      const inDy = Math.sign(from.y - prev.y);
+      cells.push({
+        x: from.x,
+        y: from.y,
+        mask: (inDy > 0 ? BIT_N : inDy < 0 ? BIT_S : inDx > 0 ? BIT_W : BIT_E) | outDir,
+        arrow: false,
+      });
+    }
+    for (let x = from.x + dx, y = from.y + dy; x !== to.x || y !== to.y; x += dx, y += dy) {
+      cells.push({ x, y, mask: dx !== 0 ? BIT_E | BIT_W : BIT_N | BIT_S, arrow: false });
+    }
+    if (i + 2 === pts.length) {
+      cells.push({ x: to.x, y: to.y, mask: backDir, arrow: true });
+    }
+  }
+  return cells;
+}
+
+function columnCrossesNode(
+  node: PlacedGraphNode,
+  x: number,
+  yTop: number,
+  yBottom: number
+): boolean {
+  return x >= node.x && x < node.x + node.w && node.y <= yBottom && node.y + node.h - 1 >= yTop;
+}
+
+/**
+ * True when the parent-center drop rows yTop..yBottom would run through an unrelated node box.
+ */
+function dropBlockedByNodes(
+  layout: WaterfallLayout,
+  x: number,
+  yTop: number,
+  yBottom: number,
+  p1: PlacedGraphNode,
+  p2: PlacedGraphNode
+): boolean {
+  if (yBottom < yTop) return false;
+  for (const node of layout.nodes.values()) {
+    if (node === p1 || node === p2) continue;
+    if (columnCrossesNode(node, x, yTop, yBottom)) return true;
+  }
+  return false;
+}
+
+function routeCrossesNode(
+  layout: WaterfallLayout,
+  cells: RouteCell[],
+  p1: PlacedGraphNode,
+  p2: PlacedGraphNode
+): boolean {
+  for (const cell of cells) {
+    for (const node of layout.nodes.values()) {
+      if (node === p1 || node === p2) continue;
+      if (cell.x >= node.x && cell.x < node.x + node.w && cell.y >= node.y && cell.y < node.y + node.h) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+type PreparedDrop = {
+  index: number;
+  edge: GraphEdge;
+  p1: PlacedGraphNode;
+  p2: PlacedGraphNode;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  midY: number;
+  blocked: boolean;
+};
+
+/**
+ * Points for an edge's pre-existing straight routing: vertical drop, or the classic
+ * down-across-down dogleg through the gap row above the child.
+ */
+function directRoutePoints(job: PreparedDrop, rowGap: number): RoutePoint[] {
+  if (job.x1 === job.x2) return [{ x: job.x1, y: job.y1 }, { x: job.x2, y: job.y2 }];
+  if (rowGap >= 2) {
+    return [
+      { x: job.x1, y: job.y1 },
+      { x: job.x1, y: job.midY },
+      { x: job.x2, y: job.midY },
+      { x: job.x2, y: job.y2 },
+    ];
+  }
+  return [{ x: job.x1, y: job.y1 }, { x: job.x1, y: job.y2 }, { x: job.x2, y: job.y2 }];
+}
+
+/**
+ * Routes every edge in world coordinates so shapes hold under pan/zoom. Edges whose
+ * parent-center drop would run through an unrelated node box are dodged through the nearest
+ * free channel column, keeping skip-layer traces away from nodes they do not connect to and
+ * from crossing other edges' routes; edges that fit keep their exact pre-existing path.
+ */
+function routeGraphEdges(layout: WaterfallLayout): RouteCell[][] {
+  const rowGap = layout.spec.rowGap;
+  const routes: RouteCell[][] = new Array(layout.edges.length);
+  const prepared: PreparedDrop[] = [];
+
+  layout.edges.forEach((edge, index) => {
+    const p1 = layout.nodes.get(edge.from);
+    const p2 = layout.nodes.get(edge.to);
+    if (!p1 || !p2) {
+      routes[index] = EMPTY_ROUTE_CELLS;
+      return;
+    }
+    const x1 = p1.x + Math.floor(p1.w / 2);
+    const y1 = p1.y + p1.h;
+    const x2 = p2.x + Math.floor(p2.w / 2);
+    const y2 = p2.y - 1;
+    if (y2 < y1) {
+      routes[index] = EMPTY_ROUTE_CELLS;
+      return;
+    }
+    const midY = rowGap >= 2 ? y2 - 1 : y2;
+    const dropBottom = x1 !== x2 ? midY - 1 : y2 - 1;
+    prepared.push({
+      index,
+      edge,
+      p1,
+      p2,
+      x1,
+      y1,
+      x2,
+      y2,
+      midY,
+      blocked: dropBlockedByNodes(layout, x1, y1, dropBottom, p1, p2),
+    });
+  });
+
+  // Occupancy bookkeeping is only worth its cost on frames where some drop must dodge.
+  const anyBlocked = prepared.some((job) => job.blocked);
+  if (!anyBlocked) {
+    for (const job of prepared) {
+      routes[job.index] = rasterizeRoute(directRoutePoints(job, rowGap), false);
+    }
+    return routes;
+  }
+
+  const cellOwners = new Map<string, Set<string>>();
+  const claim = (edge: GraphEdge, cells: RouteCell[]): void => {
+    const key = `${edge.from}->${edge.to}`;
+    for (const cell of cells) {
+      const cellKey = `${cell.x},${cell.y}`;
+      const owners = cellOwners.get(cellKey);
+      if (owners) {
+        owners.add(key);
+      } else {
+        cellOwners.set(cellKey, new Set([key]));
+      }
+    }
+  };
+
+  // A dodge candidate may only share cells with edges that connect to the same endpoints;
+  // anything else would paint a foreign edge's run or arrowhead as part of this edge's trace.
+  const crossesForeignRoute = (edge: GraphEdge, cells: RouteCell[]): boolean => {
+    for (const cell of cells) {
+      const owners = cellOwners.get(`${cell.x},${cell.y}`);
+      if (!owners) continue;
+      for (const ownerKey of owners) {
+        const sep = ownerKey.indexOf("->");
+        const ownerFrom = ownerKey.slice(0, sep);
+        const ownerTo = ownerKey.slice(sep + 2);
+        if (
+          ownerFrom !== edge.from &&
+          ownerFrom !== edge.to &&
+          ownerTo !== edge.from &&
+          ownerTo !== edge.to
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  for (const job of prepared) {
+    if (job.blocked) continue;
+    const cells = rasterizeRoute(directRoutePoints(job, rowGap), false);
+    routes[job.index] = cells;
+    claim(job.edge, cells);
+  }
+
+  for (const job of prepared) {
+    if (!job.blocked) continue;
+    const bent = job.x1 !== job.x2;
+    let cells: RouteCell[] | null = null;
+    // A bent edge with no gap row above the child has no room to dodge back into; keep it straight.
+    if (!bent || job.midY < job.y2) {
+      for (let d = 1; d < layout.stageW && !cells; d++) {
+        for (const channel of [job.x1 + d, job.x1 - d]) {
+          if (channel < 0 || channel >= layout.stageW) continue;
+          const points = bent
+            ? [
+                { x: job.x1, y: job.y1 },
+                { x: channel, y: job.y1 },
+                { x: channel, y: job.midY },
+                { x: job.x2, y: job.midY },
+                { x: job.x2, y: job.y2 },
+              ]
+            : [
+                { x: job.x1, y: job.y1 },
+                { x: channel, y: job.y1 },
+                { x: channel, y: job.y2 },
+                { x: job.x2, y: job.y2 },
+              ];
+          const candidate = rasterizeRoute(points, true);
+          if (!routeCrossesNode(layout, candidate, job.p1, job.p2) && !crossesForeignRoute(job.edge, candidate)) {
+            cells = candidate;
+            break;
+          }
+        }
+      }
+    }
+    if (!cells) cells = rasterizeRoute(directRoutePoints(job, rowGap), false);
+    routes[job.index] = cells;
+    claim(job.edge, cells);
+  }
+
+  return routes;
+}
+
+
 /**
  * Renders the top toolbar and full-height pannable waterfall DAG viewport.
  */
@@ -513,10 +787,9 @@ export function renderWaterfallGraphView(
   const toScreenX = (wx: number) => innerRect.x + state.graphCamera.tx + wx;
   const toScreenY = (wy: number) => innerRect.y + state.graphCamera.ty + wy;
 
-  for (const edge of layout.edges) {
-    const p1 = layout.nodes.get(edge.from);
-    const p2 = layout.nodes.get(edge.to);
-    if (!p1 || !p2) continue;
+  const routes = routeGraphEdges(layout);
+  for (let edgeIdx = 0; edgeIdx < layout.edges.length; edgeIdx++) {
+    const edge = layout.edges[edgeIdx]!;
 
     let priority = 1;
     let edgeStyle: CellStyle = { fg: TUI_PALETTE.border };
@@ -535,42 +808,8 @@ export function renderWaterfallGraphView(
       }
     }
 
-    const x1 = toScreenX(p1.x + Math.floor(p1.w / 2));
-    const y1 = toScreenY(p1.y + p1.h);
-    const x2 = toScreenX(p2.x + Math.floor(p2.w / 2));
-    const y2 = toScreenY(p2.y - 1);
-
-    if (y2 < y1) continue;
-    if (x1 === x2) {
-      for (let sy = y1; sy < y2; sy++) {
-        addMask(x1, sy, BIT_N | BIT_S, priority, edgeStyle);
-      }
-      addMask(x2, y2, BIT_N, priority, edgeStyle, true);
-    } else {
-      const midY = layout.spec.rowGap >= 2 ? y2 - 1 : y2;
-      for (let sy = y1; sy < midY; sy++) {
-        addMask(x1, sy, BIT_N | BIT_S, priority, edgeStyle);
-      }
-      const goRight = x2 > x1;
-      if (midY === y2) {
-        addMask(x1, midY, BIT_N | (goRight ? BIT_E : BIT_W), priority, edgeStyle);
-        const step = goRight ? 1 : -1;
-        for (let sx = x1 + step; sx !== x2; sx += step) {
-          addMask(sx, midY, BIT_E | BIT_W, priority, edgeStyle);
-        }
-        addMask(x2, y2, goRight ? BIT_W : BIT_E, priority, edgeStyle, true);
-      } else {
-        addMask(x1, midY, BIT_N | (goRight ? BIT_E : BIT_W), priority, edgeStyle);
-        const step = goRight ? 1 : -1;
-        for (let sx = x1 + step; sx !== x2; sx += step) {
-          addMask(sx, midY, BIT_E | BIT_W, priority, edgeStyle);
-        }
-        addMask(x2, midY, BIT_S | (goRight ? BIT_W : BIT_E), priority, edgeStyle);
-        for (let sy = midY + 1; sy < y2; sy++) {
-          addMask(x2, sy, BIT_N | BIT_S, priority, edgeStyle);
-        }
-        addMask(x2, y2, BIT_N, priority, edgeStyle, true);
-      }
+    for (const cell of routes[edgeIdx] ?? EMPTY_ROUTE_CELLS) {
+      addMask(toScreenX(cell.x), toScreenY(cell.y), cell.mask, priority, edgeStyle, cell.arrow);
     }
   }
 
