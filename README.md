@@ -64,6 +64,8 @@ pp view                                      # open the live dashboard
 
 `pp init` won't overwrite an existing hand-written `ROADMAP.md`. Move it aside, or pass `--force`.
 
+Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.project-pulse/.store-lock.sqlite` — coordination state, never source. Ignore it in consumer repos: `.project-pulse/.store-lock.sqlite*`. A mutation waits up to 10s for the lock (override with `PP_LOCK_TIMEOUT_MS`), then fails with a retryable conflict.
+
 ## Commands
 
 | Command | Description |
