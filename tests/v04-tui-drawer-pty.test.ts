@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 import type { BeadsClient } from "../src/beads";
 import { RoadmapService } from "../src/store";
 import { TuiController } from "../src/tui/app";
-import type { InputEvent, TerminalSession } from "../src/tui/input";
+import { getDrawerRect } from "../src/tui/drawer";
+import { NodeTerminalSession, type InputEvent, type TerminalSession } from "../src/tui/input";
 import type { ColorMode } from "../src/tui/screen";
 import { waitFor } from "./helpers/wait";
 
@@ -342,6 +343,228 @@ sys.exit(rc)
       session.click(ctrl, "picker-opt-0");
       expect(ctrl.getState().openPicker).toBeNull();
       expect(ctrl.getState().statusFilter).toBe(opt.value);
+    } finally {
+      ctrl.stop();
+    }
+  });
+
+  test("NodeTerminalSession reports the real pane size instead of inflated minimums", () => {
+    const session = new NodeTerminalSession();
+    const out = process.stdout as unknown as { columns?: number; rows?: number };
+    const prevCols = out.columns;
+    const prevRows = out.rows;
+    try {
+      // An eight-row pane must yield height 8 so the frame can never write past
+      // the terminal's last row (previously floored at 10).
+      out.columns = 100;
+      out.rows = 8;
+      expect(session.width).toBe(100);
+      expect(session.height).toBe(8);
+
+      out.columns = undefined;
+      out.rows = undefined;
+      expect(session.width).toBe(80);
+      expect(session.height).toBe(24);
+    } finally {
+      out.columns = prevCols;
+      out.rows = prevRows;
+    }
+  });
+
+  test("getDrawerRect clamps to small panes instead of imposing 36x14", () => {
+    // Modal on a 100x8 pane: centered with margins, footer row free.
+    const modal = getDrawerRect(100, 8, 3);
+    expect(modal.mode).toBe("modal");
+    expect(modal.x).toBeGreaterThanOrEqual(1);
+    expect(modal.y).toBeGreaterThanOrEqual(1);
+    expect(modal.x + modal.w).toBeLessThanOrEqual(99);
+    expect(modal.y + modal.h).toBeLessThanOrEqual(7);
+
+    // Wide but eight-row pane falls back to the modal: the split area is too
+    // short for frame + pinned header + a body row.
+    const wideShort = getDrawerRect(140, 8, 3);
+    expect(wideShort.mode).toBe("modal");
+    expect(wideShort.y).toBeGreaterThanOrEqual(1);
+    expect(wideShort.y + wideShort.h).toBeLessThanOrEqual(7);
+
+    // Split on a wide pane with real vertical space below the tabs.
+    const split = getDrawerRect(140, 14, 3);
+    expect(split.mode).toBe("split");
+    expect(split.y).toBe(3);
+    expect(split.h).toBeGreaterThanOrEqual(6);
+    expect(split.y + split.h).toBeLessThanOrEqual(13);
+    expect(split.x + split.w).toBeLessThanOrEqual(140);
+
+    // Narrow pane shrinks the modal width below the old 36 floor.
+    const narrow = getDrawerRect(30, 24, 3);
+    expect(narrow.mode).toBe("modal");
+    expect(narrow.x + narrow.w).toBeLessThanOrEqual(29);
+    expect(narrow.y + narrow.h).toBeLessThanOrEqual(23);
+  });
+
+  test("eight-row pane: drawer fits, paging reaches the bottom, focusing the note reveals the input", () => {
+    seedProject(tempDir);
+    const session = new VirtualDrawerSession(100, 8);
+    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
+    ctrl.start();
+
+    try {
+      ctrl.getState().selectedFeatureId = "tui-drawer";
+      ctrl.handleEvent({ type: "key", key: "enter", raw: "\r" });
+      expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
+
+      // No hit region may reach outside the 8-row pane.
+      for (const r of ctrl.getBuffer().getHitRegions()) {
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.y).toBeGreaterThanOrEqual(0);
+        expect(r.x + r.w).toBeLessThanOrEqual(100);
+        expect(r.y + r.h).toBeLessThanOrEqual(8);
+      }
+
+      const panel = ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-panel")!;
+      expect(panel).toBeDefined();
+      // Footer row stays free and the drawer's bottom border is painted in-pane.
+      expect(panel.y + panel.h).toBeLessThanOrEqual(7);
+      const bottomRow = ctrl.getBuffer().toPlainLines()[panel.y + panel.h - 1]!;
+      expect(bottomRow).toContain("╰");
+      expect(bottomRow).toContain("╯");
+
+      // The inline note input sits far below the one visible body row.
+      expect(
+        ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-note-input")
+      ).toBeUndefined();
+
+      // Page down until clamped: the bottom of the drawer is reachable.
+      let last = -1;
+      for (let i = 0; i < 40 && ctrl.getState().drawerScrollY !== last; i++) {
+        last = ctrl.getState().drawerScrollY;
+        ctrl.handleEvent({ type: "key", key: "pagedown", raw: "\x1b[6~" });
+      }
+      expect(ctrl.getState().drawerScrollY).toBe(last);
+      expect(last).toBeGreaterThan(0);
+
+      // Focusing the note auto-reveals the input row inside the drawer body.
+      ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
+      expect(ctrl.getState().drawerFocus).toBe("note");
+      const noteInput = ctrl
+        .getBuffer()
+        .getHitRegions()
+        .find((r) => r.id === "drawer-note-input")!;
+      expect(noteInput).toBeDefined();
+      expect(noteInput.y).toBe(panel.y + 4); // body row under the pinned divider
+      const noteSubmit = ctrl
+        .getBuffer()
+        .getHitRegions()
+        .find((r) => r.id === "drawer-note-submit")!;
+      expect(noteSubmit).toBeDefined();
+      expect(noteSubmit.y).toBe(noteInput.y);
+      expect(ctrl.getState().drawerScrollY).toBeGreaterThan(0);
+
+      // Escape returns to criteria (keys route to the note editor while it is
+      // focused); Tab re-enters the note and keeps it revealed.
+      ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
+      expect(ctrl.getState().drawerFocus).toBe("criteria");
+      ctrl.handleEvent({ type: "key", key: "tab", raw: "\t" });
+      expect(ctrl.getState().drawerFocus).toBe("note");
+      expect(
+        ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-note-input")
+      ).toBeDefined();
+    } finally {
+      ctrl.stop();
+    }
+  });
+
+  test("long dependency chips truncate inside the drawer while keeping a full-width click target", () => {
+    const svc = seedProject(tempDir);
+    svc.addFeature({
+      id: "upstream-feature-with-a-very-long-identifier-for-truncation",
+      title: "Long Upstream",
+      milestone: "v0.1",
+      status: "planned",
+    });
+    svc.addFeature({
+      id: "chip-truncation",
+      title: "Chip Truncation",
+      milestone: "v0.1",
+      status: "planned",
+      depends_on: ["upstream-feature-with-a-very-long-identifier-for-truncation"],
+    });
+    const session = new VirtualDrawerSession(140, 42);
+    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
+    ctrl.start();
+
+    try {
+      ctrl.getState().selectedFeatureId = "chip-truncation";
+      ctrl.handleEvent({ type: "key", key: "enter", raw: "\r" });
+      const panel = ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-panel")!;
+      expect(panel).toBeDefined();
+
+      const depId = "upstream-feature-with-a-very-long-identifier-for-truncation";
+      const chip = ctrl
+        .getBuffer()
+        .getHitRegions()
+        .find((r) => r.id === `drawer-jump-${depId}`)!;
+      // The chip is rendered (not skipped) and clipped to the drawer's own rect.
+      expect(chip).toBeDefined();
+      expect(chip.x).toBeGreaterThanOrEqual(panel.x + 1);
+      expect(chip.x + chip.w).toBeLessThanOrEqual(panel.x + panel.w - 1);
+      expect(chip.w).toBe(panel.w - 3); // fills the full inner width when truncated
+
+      const row = ctrl.getBuffer().toPlainLines()[chip.y]!;
+      const inside = row.slice(chip.x, chip.x + chip.w);
+      expect(inside.trim().startsWith("→ ")).toBe(true);
+      expect(inside).toContain("…");
+      // The untruncated tail never paints past the drawer border.
+      expect(row).not.toContain("for-truncation");
+
+      // The truncated chip keeps its full click target and still jumps.
+      session.click(ctrl, `drawer-jump-${depId}`);
+      expect(ctrl.getState().drawerFeatureId).toBe(depId);
+    } finally {
+      ctrl.stop();
+    }
+  });
+
+  test("long card area labels truncate inside their card instead of painting into neighbors", () => {
+    const svc = seedProject(tempDir);
+    svc.addFeature({
+      id: "area-overflow-card",
+      title: "Area Overflow",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Platform Infrastructure and Developer Experience Group",
+    });
+    const ctrl = new TuiController({
+      rootDir: tempDir,
+      noBeads: true,
+      session: new VirtualDrawerSession(140, 42),
+    });
+    ctrl.start();
+
+    try {
+      const card = ctrl
+        .getBuffer()
+        .getHitRegions()
+        .find((r) => r.id === "card-area-overflow-card")!;
+      expect(card).toBeDefined();
+
+      const row = ctrl.getBuffer().toPlainLines()[card.y + 2]!;
+      // Interior slice: skip the left border plus padding and the right border.
+      const inside = row.slice(card.x + 2, card.x + card.w - 2);
+      // ID keeps its reserved cells on the left; 4 cells hold a truncated
+      // prefix plus the ellipsis ("are…"), never spilling into the label.
+      expect(inside.startsWith("are…")).toBe(true);
+      // The area label is ellipsis-truncated within the card rectangle.
+      expect(inside).toContain("…");
+      expect(row).not.toContain("Experience Group");
+
+      // Nothing bleeds through the gap into the neighboring card.
+      expect(row.slice(card.x + card.w, card.x + card.w + 2)).toMatch(/^[\s│]*$/);
+
+      // The whole card stays the click target where the truncated label sits.
+      expect(ctrl.getBuffer().hitTest(card.x + card.w - 3, card.y + 2)?.id).toBe(
+        "card-area-overflow-card"
+      );
     } finally {
       ctrl.stop();
     }

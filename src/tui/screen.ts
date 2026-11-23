@@ -414,8 +414,15 @@ export class ScreenBuffer {
   }
 
   addHitRegion(region: HitRegion): void {
-    if (region.w <= 0 || region.h <= 0) return;
-    this.hitRegions.push(region);
+    // Clamp to the frame: layouts with minimum sizes larger than the pane (or
+    // rows scrolled past the bottom) must never register click targets outside
+    // the visible buffer. Intersection-less rects are discarded entirely.
+    const x0 = Math.max(0, Math.floor(region.x));
+    const y0 = Math.max(0, Math.floor(region.y));
+    const x1 = Math.min(this.width, Math.floor(region.x + region.w));
+    const y1 = Math.min(this.height, Math.floor(region.y + region.h));
+    if (x1 <= x0 || y1 <= y0) return;
+    this.hitRegions.push({ ...region, x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
   }
 
   getHitRegions(): readonly HitRegion[] {
