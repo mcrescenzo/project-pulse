@@ -266,4 +266,68 @@ describe("v0.3 Agent Onboarding & Repo Setup (pp setup)", () => {
     expect(textOut.code).toBe(0);
     expect(textOut.stdout).toContain('"project-pulse"');
   });
+
+  test("updates only owned command/args on a customized project-pulse entry, keeping extra fields and siblings, and is a no-op once owned fields match", () => {
+    const mcpPath = join(tempDir, ".mcp.json");
+    writeFileSync(
+      mcpPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            otherTool: { command: "npx", args: ["other-mcp"], env: { DEBUG: "1" } },
+            "project-pulse": {
+              command: "node",
+              args: ["/old/path/pulse.js"],
+              env: { PP_TOKEN: "secret" },
+              disabled: true,
+            },
+          },
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    // Stale owned fields trigger an update, but only command/args change on the entry
+    const first = runRepoSetup(tempDir, { mcpPath: ".mcp.json" });
+    const firstAction = first.actions.find((a) => a.target === "mcp-config");
+    expect(firstAction?.action).toBe("update");
+    const updated = JSON.parse(readFileSync(mcpPath, "utf8"));
+    expect(updated.mcpServers["project-pulse"]).toEqual({
+      command: "pp",
+      args: ["mcp"],
+      env: { PP_TOKEN: "secret" },
+      disabled: true,
+    });
+    expect(updated.mcpServers.otherTool).toEqual({ command: "npx", args: ["other-mcp"], env: { DEBUG: "1" } });
+
+    // With owned fields matching, extra fields do not force a rewrite: second setup is a no-op
+    const afterFirst = readFileSync(mcpPath, "utf8");
+    const second = runRepoSetup(tempDir, { mcpPath: ".mcp.json" });
+    const secondAction = second.actions.find((a) => a.target === "mcp-config");
+    expect(secondAction?.action).toBe("unchanged");
+    expect(readFileSync(mcpPath, "utf8")).toBe(afterFirst);
+
+    // An entry whose owned fields already match is left byte-identical on first contact too
+    const customized = join(tempDir, "custom-mcp.json");
+    writeFileSync(
+      customized,
+      JSON.stringify(
+        {
+          mcpServers: {
+            "project-pulse": { command: "pp", args: ["mcp"], env: { PP_TOKEN: "secret" }, disabled: true },
+          },
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    const customizedRaw = readFileSync(customized, "utf8");
+    const customizedRun = runRepoSetup(tempDir, { mcpPath: "custom-mcp.json" });
+    const customizedAction = customizedRun.actions.find((a) => a.target === "mcp-config");
+    expect(customizedAction?.action).toBe("unchanged");
+    expect(readFileSync(customized, "utf8")).toBe(customizedRaw);
+  });
 });
