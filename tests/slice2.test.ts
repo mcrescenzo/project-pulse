@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliBeadsClient, type BeadsClient } from "../src/beads";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import { formatSummaryText, RoadmapService } from "../src/store";
 import type { BeadStatusInfo } from "../src/types";
 

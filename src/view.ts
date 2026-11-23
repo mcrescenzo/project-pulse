@@ -2,18 +2,8 @@ import { readdirSync, realpathSync, statSync, watch, type FSWatcher } from "node
 import { basename, dirname, join } from "node:path";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { buildDashboardHtml, FAVICON_SVG, type RoadmapViewPayload } from "./dashboard-html";
-import {
-  buildAllowedHosts,
-  buildOpenUrl,
-  forbiddenHostResponse,
-  generateAccessToken,
-  handleTokenLanding,
-  isAccessAuthorized,
-  isAllowedHost,
-  redactPaths,
-  unauthorizedResponse,
-  withSecurityHeaders,
-} from "./http-security";
+import { buildAllowedHosts, buildOpenUrl, forbiddenHostResponse, generateAccessToken, handleTokenLanding, isAccessAuthorized, isAllowedHost, redactPaths, unauthorizedResponse, withSecurityHeaders } from "./http-security";
+import { startHttpServer } from "./http-server";
 import { RoadmapService } from "./store";
 import type { BeadStatusInfo, FeatureStatus } from "./types";
 
@@ -26,14 +16,14 @@ export interface ViewServerOptions {
 }
 
 export interface ViewServerHandle {
-  server: ReturnType<typeof Bun.serve>;
   port: number;
   /** Base URL (no token); requests to it require the access cookie or X-PP-Access-Token header. */
   url: string;
   /** URL to open in a browser: carries `?t=<token>` and is exchanged for an HttpOnly session cookie. */
   openUrl: string;
   accessToken: string;
-  stop: () => void;
+  /** Closes the listener and all project slots; resolves once sockets are torn down. Idempotent. */
+  stop: () => Promise<void>;
 }
 
 export interface ProjectSlot {
@@ -551,11 +541,12 @@ export function createProjectSlot(
 
 /**
  * Starts the live-reloading standalone local browser dashboard server (`pp view --standalone`).
+ * Resolves only once the listener is bound (dynamic port 0 resolved); a bind failure rejects.
  */
-export function startViewServer(
+export async function startViewServer(
   rootDir: string,
   options: ViewServerOptions = {}
-): ViewServerHandle {
+): Promise<ViewServerHandle> {
   const slot = createProjectSlot(rootDir, { beadsClient: options.beadsClient });
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? 4310;
@@ -610,25 +601,21 @@ export function startViewServer(
     return new Response("Not Found", { status: 404 });
   };
 
-  const server = Bun.serve({
+  const http = await startHttpServer({
     hostname,
     port: requestedPort,
-    idleTimeout: 255,
-    async fetch(req) {
-      return withSecurityHeaders(await route(req));
-    },
+    handler: async (req) => withSecurityHeaders(await route(req)),
   });
 
-  boundPort = server.port ?? requestedPort;
+  boundPort = http.port;
   const viewUrl = `http://${hostname}:${boundPort}`;
 
-  const stop = () => {
+  const stop = async () => {
     slot.close();
-    server.stop(true);
+    await http.stop();
   };
 
   return {
-    server,
     port: boundPort,
     url: viewUrl,
     openUrl: buildOpenUrl(viewUrl, "/", accessToken),

@@ -24,7 +24,7 @@ afterEach(async () => {
     browser = null;
   }
   if (handle) {
-    handle.stop();
+    await handle.stop();
     handle = null;
   }
   rmSync(tempDir, { recursive: true, force: true });
@@ -45,7 +45,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       ship_criteria: ["Keyboard navigation works", "Label click toggles checkbox"],
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -178,7 +178,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       area: "Docs",
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -327,7 +327,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       area: "Core",
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -399,7 +399,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     });
 
     const accessToken = "reconnect-fixture-token-0123456789";
-    handle = startViewServer(tempDir, { port: 0, accessToken });
+    handle = await startViewServer(tempDir, { port: 0, accessToken });
     const serverPort = handle.port;
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -417,7 +417,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       );
 
       // Controlled disconnect: stopping the server closes the established SSE stream client-side.
-      handle.stop();
+      await handle.stop();
       handle = null;
       await page.waitForFunction(
         () => (document.getElementById("live-badge")?.textContent || "").includes("Reconnecting"),
@@ -430,7 +430,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
 
       // Restart on the same port and token so the session cookie stays valid; the page itself
       // is never reloaded or interacted with from here on.
-      handle = startViewServer(tempDir, { port: serverPort, accessToken });
+      handle = await startViewServer(tempDir, { port: serverPort, accessToken });
       await page.waitForFunction(
         () => (document.body.textContent || "").includes("Offline edit appears on reconnect"),
         null,
@@ -456,7 +456,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       area: "Core",
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -557,7 +557,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       area: "Core",
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -680,7 +680,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     // chip that opens the drawer over the panel.
     rmSync(join(tempDir, ".project-pulse", "features", "dep-root.md"));
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 
@@ -753,7 +753,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       area: "Core",
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
@@ -807,7 +807,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       });
     }
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 

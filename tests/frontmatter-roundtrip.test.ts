@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as yamlParse } from "yaml";
 import { parseMarkdownFile, serializeConfig, serializeFeature, serializeMilestone } from "../src/frontmatter";
 import { RoadmapService } from "../src/store";
 import type { Feature, Milestone, PulseConfig } from "../src/types";
+import { runCliCaptured as runCliCapturedImpl } from "./helpers/cli";
 
 let tempDir: string;
 
@@ -16,18 +18,9 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-async function runCliCaptured(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../src/cli.ts"), ...args], {
-    cwd: tempDir,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
+// Lockstep wrapper: every case in this file runs the CLI with cwd bound to the per-test tempDir.
+async function runCliCaptured(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return runCliCapturedImpl(args, { cwd: tempDir });
 }
 
 // Values whose plain YAML form is ambiguous on supported Bun runtimes:
@@ -110,7 +103,7 @@ describe("Frontmatter YAML round-trip", () => {
       integrations: { beads: { enabled: true } },
     };
     const yaml = serializeConfig(config);
-    const reparsed = Bun.YAML.parse(yaml) as PulseConfig;
+    const reparsed = yamlParse(yaml) as PulseConfig;
     expect(reparsed).toEqual(config);
     expect(typeof reparsed.project.name).toBe("string");
     expect(reparsed.project.summary).toBe("Multi\nline summary.");

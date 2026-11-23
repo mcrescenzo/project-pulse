@@ -6,6 +6,7 @@ import { startHubServer, type HubServerHandle } from "../src/hub";
 import { accessCookieName } from "../src/http-security";
 import { RoadmapService } from "../src/store";
 import { authFetch } from "./helpers/auth";
+import { spawnCli } from "./helpers/cli";
 
 /**
  * Rotation contract (README.md / SECURITY.md): dashboard servers capture the access token once at
@@ -24,9 +25,9 @@ beforeEach(() => {
   stateDir = join(tempRoot, "state");
 });
 
-afterEach(() => {
+afterEach(async () => {
   if (hub) {
-    hub.stop();
+    await hub.stop();
     hub = null;
   }
   rmSync(tempRoot, { recursive: true, force: true });
@@ -80,7 +81,7 @@ describe("v0.5 access-token rotation (stop → delete file → restart)", () => 
     new RoadmapService(repo).init({ name: "Rotation Hub" });
 
     // Startup: the hub loads (and creates) the persisted token once.
-    const first = startHubServer({ port: 0, stateDir });
+    const first = await startHubServer({ port: 0, stateDir });
     hub = first;
     const oldToken = first.accessToken;
     expect(oldToken).toMatch(/^[0-9a-f]{64}$/);
@@ -109,9 +110,9 @@ describe("v0.5 access-token rotation (stop → delete file → restart)", () => 
     ).toBe(401);
 
     // Rotation: stop the hub, then start again against the same state dir.
-    first.stop();
+    await first.stop();
     hub = null;
-    const second = startHubServer({ port: 0, stateDir });
+    const second = await startHubServer({ port: 0, stateDir });
     hub = second;
     const newToken = second.accessToken;
     expect(newToken).toMatch(/^[0-9a-f]{64}$/);
@@ -138,9 +139,9 @@ describe("v0.5 access-token rotation (stop → delete file → restart)", () => 
     expect(freshLanding.headers.get("location")).toBe("/");
 
     // Plain restart without deleting the file keeps the same token — rotation needs the delete.
-    second.stop();
+    await second.stop();
     hub = null;
-    const third = startHubServer({ port: 0, stateDir });
+    const third = await startHubServer({ port: 0, stateDir });
     hub = third;
     expect(third.accessToken).toBe(newToken);
     expect(readFileSync(tokenPath(), "utf8").trim()).toBe(newToken);
@@ -151,21 +152,9 @@ describe("v0.5 access-token rotation (stop → delete file → restart)", () => 
     new RoadmapService(repo).init({ name: "Rotation Standalone" });
 
     const spawnView = () =>
-      Bun.spawn(
-        [
-          process.execPath,
-          "run",
-          join(import.meta.dir, "../src/cli.ts"),
-          "view",
-          "--standalone",
-          "--port",
-          "0",
-          "--no-open",
-          "--root",
-          repo,
-        ],
-        { stdout: "pipe", stderr: "pipe", env: { ...process.env, PROJECT_PULSE_HOME: stateDir } }
-      );
+      spawnCli(["view", "--standalone", "--port", "0", "--no-open", "--root", repo], {
+        env: { PROJECT_PULSE_HOME: stateDir },
+      });
 
     const proc1 = spawnView();
     const url1 = await waitForListeningUrl(proc1);

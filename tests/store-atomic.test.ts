@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawn as nodeSpawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import { join } from "node:path";
 import { ROADMAP_GENERATED_MARKER } from "../src/renderer";
 import { caseCollisionEntry, RoadmapService } from "../src/store";
 import { STORE_LOCK_FILE_NAME, withStoreLock } from "../src/store-lock";
+import { runCliCaptured as runCliCapturedImpl, sleep } from "./helpers/cli";
 
 const GENERATED_ROADMAP_HEADER = `${ROADMAP_GENERATED_MARKER} Do not edit manually. -->`;
 const NOTE_COUNT = 12;
@@ -52,24 +54,14 @@ function initRepo(): RoadmapService {
 }
 
 interface CliResult {
-  code: number;
+  code: number | null;
   stdout: string;
   stderr: string;
 }
 
+// Lockstep wrapper: cwd bound to tempDir, optional env merged over process.env.
 async function runCli(args: string[], env?: Record<string, string>): Promise<CliResult> {
-  const proc = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../src/cli.ts"), ...args], {
-    cwd: tempDir,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: env ? { ...process.env, ...env } : process.env,
-  });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
+  return runCliCapturedImpl(args, { cwd: tempDir, env });
 }
 
 // Polls for a file an external subprocess creates; the awaited condition is a real
@@ -80,7 +72,7 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
     if (Date.now() > deadline) {
       throw new Error(`Timed out waiting for ${path}`);
     }
-    await Bun.sleep(10);
+    await sleep(10);
   }
 }
 
@@ -185,18 +177,22 @@ describe("Store atomicity: cross-process locking, init guard, case collisions", 
 
     const readyPath = join(tempDir, "lock-holder-ready");
     // Holder takes the same write transaction a pp process takes, then parks until killed.
+    // Each runtime loads its own built-in SQLite driver; the park is an Atomics wait on both,
+    // and a killed holder must release the kernel file lock without any cleanup step.
+    const driverImport = process.versions.bun
+      ? `const { Database } = require("bun:sqlite");`
+      : `const { DatabaseSync: Database } = require("node:sqlite");`;
     const holderCode = [
-      `const { Database } = require("bun:sqlite");`,
+      driverImport,
       `const db = new Database(${JSON.stringify(lockDbPath())});`,
       `db.exec("PRAGMA busy_timeout = 25");`,
       `db.exec("BEGIN IMMEDIATE");`,
       `require("node:fs").writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-      "Bun.sleepSync(30000);",
+      "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);",
     ].join("\n");
-    const holder = Bun.spawn([process.execPath, "-e", holderCode], {
+    const holder = nodeSpawn(process.execPath, ["-e", holderCode], {
       cwd: tempDir,
-      stdout: "ignore",
-      stderr: "ignore",
+      stdio: "ignore",
     });
     await waitForFile(readyPath, 5000);
 
@@ -212,7 +208,9 @@ describe("Store atomicity: cross-process locking, init guard, case collisions", 
     // Recovery: SIGKILL the holder. The kernel releases the SQLite file lock immediately, so the
     // same note succeeds without any stale-lock cleanup or unlink.
     holder.kill("SIGKILL");
-    await holder.exited;
+    const { promise: holderExited, resolve: holderGone } = Promise.withResolvers<void>();
+    holder.once("exit", () => holderGone());
+    await holderExited;
 
     const retried = await runCli(["feature", "note", "f", "after-conflict"]);
     expect(retried.code, retried.stderr).toBe(0);

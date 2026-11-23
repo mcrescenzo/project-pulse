@@ -497,7 +497,7 @@ export async function runMcpServer(
     }
   }
 
-  for await (const chunk of Bun.stdin.stream()) {
+  for await (const chunk of process.stdin) {
     buffer += decoder.decode(chunk, { stream: true });
     let newlineIndex = buffer.indexOf("\n");
     while (newlineIndex !== -1) {

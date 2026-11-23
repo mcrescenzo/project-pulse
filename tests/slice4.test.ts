@@ -6,6 +6,7 @@ import type { BeadsClient } from "../src/beads";
 import { RoadmapService } from "../src/store";
 import { startViewServer, type ViewServerHandle } from "../src/view";
 import { authFetch } from "./helpers/auth";
+import { requestWithHeaders } from "./helpers/http";
 
 let tempDir: string;
 let handle: ViewServerHandle | null = null;
@@ -14,9 +15,9 @@ beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "project-pulse-s4-"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   if (handle) {
-    handle.stop();
+    await handle.stop();
     handle = null;
   }
   rmSync(tempDir, { recursive: true, force: true });
@@ -73,7 +74,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
       },
     };
 
-    handle = startViewServer(tempDir, { port: 0, beadsClient });
+    handle = await startViewServer(tempDir, { port: 0, beadsClient });
 
     const api = authFetch(handle.accessToken);
 
@@ -111,7 +112,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
       ship_criteria: ["Status changes", "Criteria toggle"],
     });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
 
     const api = authFetch(handle.accessToken);
 
@@ -166,7 +167,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "active" });
     svc.addFeature({ id: "safe-feat", title: "Safe Feature", milestone: "v0.1", status: "planned" });
 
-    handle = startViewServer(tempDir, { port: 0 });
+    handle = await startViewServer(tempDir, { port: 0 });
 
     const api = authFetch(handle.accessToken);
     const endpoint = `${handle.url}/api/features/safe-feat/pulse`;
@@ -208,8 +209,8 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     });
     expect(crossSite.status).toBe(403);
 
-    // Spoofed Host -> 403
-    const badHost = await api(endpoint, {
+    // Spoofed Host -> 403 (sent via node:http: undici's fetch drops the forbidden Host header)
+    const badHost = await requestWithHeaders(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Host: "evil.example:4310" },
       body: JSON.stringify({ status: "in-progress" }),
@@ -240,7 +241,7 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
   test("requires access token, rejects foreign Host on reads, exchanges ?t= for a cookie, and sets anti-framing headers", async () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "Auth Demo" });
-    handle = startViewServer(tempDir, { port: 0, accessToken: "a".repeat(64) });
+    handle = await startViewServer(tempDir, { port: 0, accessToken: "a".repeat(64) });
     const base = handle.url;
 
     // Unauthenticated reads are rejected (HTML and JSON)
@@ -257,7 +258,8 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
     expect((await fetch(`${base}/?t=${"b".repeat(64)}`, { redirect: "manual" })).status).toBe(401);
 
     // DNS-rebinding: a foreign Host is rejected even with valid credentials, on GET routes too
-    const rebound = await fetch(`${base}/api/roadmap`, {
+    // (sent via node:http: undici's fetch drops the forbidden Host header)
+    const rebound = await requestWithHeaders(`${base}/api/roadmap`, {
       headers: { Host: "attacker.example", "X-PP-Access-Token": handle.accessToken },
     });
     expect(rebound.status).toBe(403);
@@ -280,11 +282,15 @@ describe("Slice 4: Live-Reloading Local Browser Dashboard (pp view)", () => {
       "Auth Demo"
     );
 
-    // Anti-framing / hardening headers on every response, including errors
-    for (const res of [withCookie, noAuthHtml, rebound]) {
+    // Anti-framing / hardening headers on every response, including errors. `rebound` went
+    // through node:http (Host-header control), so its headers are a plain record.
+    for (const res of [withCookie, noAuthHtml]) {
       expect(res.headers.get("x-frame-options")).toBe("DENY");
       expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
       expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     }
+    expect(rebound.headers["x-frame-options"]).toBe("DENY");
+    expect(rebound.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(rebound.headers["x-content-type-options"]).toBe("nosniff");
   });
 });

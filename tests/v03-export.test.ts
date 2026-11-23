@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, type Browser } from "playwright-core";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import { exportStaticHtml } from "../src/export";
 import { RoadmapService } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";

@@ -1,3 +1,5 @@
+import stringWidth from "string-width";
+
 export type ColorMode = "truecolor" | "256" | "16" | "none";
 
 export interface PaletteColor {
@@ -107,7 +109,7 @@ export function segmentText(text: string): string[] {
  * Terminal cells occupied by a single grapheme cluster (0, 1, or 2).
  */
 export function glyphCellWidth(glyph: string): number {
-  return Math.max(0, Math.min(2, Bun.stringWidth(glyph)));
+  return Math.max(0, Math.min(2, stringWidth(glyph)));
 }
 
 /**

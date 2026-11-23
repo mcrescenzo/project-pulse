@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import { parseMarkdownFile, serializeConfig, serializeFeature } from "../src/frontmatter";
 import { findProjectRoot, RoadmapService } from "../src/store";
 
