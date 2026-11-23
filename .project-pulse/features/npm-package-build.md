@@ -34,5 +34,17 @@ updates:
       1.3.9 with node absent from an isolated PATH (bun add + bunx --bun
       --no-install project-pulse and pp). Bun 1.3.0 floor execution covered by
       CI dist smoke."
+  - at: 2026-11-23T19:41:02.766Z
+    note: "FINAL artifact supersession (commits 157e080 + 3305651, runtime tip
+      fb98f6e): the glyph-width memoization changed the bundle, superseding the
+      SRI in the previous note. Final RC 1.0.0-rc.1: tarball 151,374 bytes, SRI
+      sha512-H5Dhou7QOdsDFqEwm2HvssQdqTbSLEjZLQzQBtjyoOUxXXC/KVMaBoKs3XJ0XvtSsE\
+      uU5EcGeYVIecxjl8Ohtg==, sha512 file digest
+      1f90e1a2eed039db0316a1309b61efb2c41da936d22c48d92d0cd006d8f2a0e5315d70bf2\
+      9531a0682acdd72745efb52b04b94e4470679854879cc6397c3a1b6. Same 5-file
+      manifest; consumer proofs re-run green on Node 24.0.0 floor, Node 24.22.2
+      LTS (no bun on PATH) and Bun 1.3.9 (node absent). This is the tested RC;
+      the stable v1.0.0 artifact will be rebuilt by CI on the tagged commit and
+      its digest verified there."
 ---
 Produces a clean bundled dist/cli.js package with Node shebang and verifies local npm pack installs across Node.js and Bun.
