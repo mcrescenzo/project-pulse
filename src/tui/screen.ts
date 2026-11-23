@@ -106,10 +106,18 @@ export function segmentText(text: string): string[] {
 }
 
 /**
- * Terminal cells occupied by a single grapheme cluster (0, 1, or 2).
+ * Terminal cells occupied by a single grapheme cluster (0, 1, or 2). The width per cluster is a
+ * pure function and TUI rendering repeats clusters constantly, so results are memoized.
  */
+const glyphWidthCache = new Map<string, number>();
+
 export function glyphCellWidth(glyph: string): number {
-  return Math.max(0, Math.min(2, stringWidth(glyph)));
+  let width = glyphWidthCache.get(glyph);
+  if (width === undefined) {
+    width = Math.max(0, Math.min(2, stringWidth(glyph)));
+    glyphWidthCache.set(glyph, width);
+  }
+  return width;
 }
 
 /**

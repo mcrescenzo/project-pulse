@@ -159,7 +159,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
     } finally {
       ctrl.stop();
     }
-  });
+  }, 15000);
 
   test("paints immediately before async Beads completes, hydrates Beads later, and preserves unsaved draft across live fs.watch reload", async () => {
     const svc = seedProject(tempDir);

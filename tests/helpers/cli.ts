@@ -122,13 +122,14 @@ export function expectQuietStderr(stderr: string, context: string): void {
   if (stderr === "") return;
   if (!process.versions.bun) {
     const lines = stderr.split("\n").filter((line) => line.trim() !== "");
-    const tolerated = lines.filter(
-      (line) =>
-        /ExperimentalWarning/.test(line) &&
-        /SQLite/.test(line) &&
-        /experimental feature|may change/.test(line)
-    );
-    if (tolerated.length === lines.length) return;
+    const isSqliteWarning = (line: string) =>
+      /ExperimentalWarning/.test(line) && /SQLite/.test(line) && /experimental feature|may change/.test(line);
+    // The warning's companion hint ("Use `node --trace-warnings ...`") is part of the same
+    // platform diagnostic, never a standalone signal.
+    const isWarningHint = (line: string) => /node --trace-warnings/.test(line);
+    const hasWarning = lines.some(isSqliteWarning);
+    const others = lines.filter((line) => !isSqliteWarning(line) && !isWarningHint(line));
+    if (hasWarning && others.length === 0) return;
   }
   throw new Error(`${context}: expected empty stderr, got:\n${stderr}`);
 }
