@@ -176,6 +176,18 @@ function asOptionalStringArray(value: unknown): string[] | undefined {
 }
 
 /**
+ * Thrown when tools/call names a tool the server does not advertise.
+ * This is a protocol-level invalid-params condition (JSON-RPC error, no result),
+ * unlike failures inside a known tool, which surface as tool errors (isError).
+ */
+class UnknownToolError extends Error {
+  constructor(name: string) {
+    super(`Unknown MCP tool '${name}'`);
+    this.name = "UnknownToolError";
+  }
+}
+
+/**
  * Creates a pure JSON-RPC request handler for Project Pulse MCP tools.
  */
 export function createMcpHandler(
@@ -286,7 +298,7 @@ export function createMcpHandler(
       }
 
       default:
-        throw new Error(`Unknown MCP tool '${name}'`);
+        throw new UnknownToolError(name);
     }
   }
 
@@ -369,6 +381,18 @@ export function createMcpHandler(
               },
             };
           } catch (toolError) {
+            if (toolError instanceof UnknownToolError) {
+              // Unknown tool name is a protocol-level invalid-params error:
+              // JSON-RPC error response, no result (2024-11-05 contract).
+              return {
+                jsonrpc: "2.0",
+                id: reqId,
+                error: {
+                  code: -32602,
+                  message: toolError.message,
+                },
+              };
+            }
             return {
               jsonrpc: "2.0",
               id: reqId,

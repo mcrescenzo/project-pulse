@@ -895,6 +895,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       feedback: Object.create(null),
       saving: false,
       drawerFeatureId: null,
+      drawerReturnFocusEl: null,
       readSeq: 0,
       loadError: null,
       graphCamera: { scale: 1, tx: 0, ty: 0, initialized: false, layoutKey: "" },
@@ -941,6 +942,12 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
     function openDrawer(featureId, opts) {
       const focusDrawer = !opts || opts.focusDrawer !== false;
+      if (!state.selectedFeatureId) {
+        // New drawer session: remember the trigger so Close/Escape can restore focus,
+        // including when the drawer was opened from the health panel's Inspect chip.
+        // Jumps between features inside an open drawer keep the original trigger.
+        state.drawerReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }
       state.lastFocusedCardId = state.lastFocusedCardId || featureId;
       state.selectedFeatureId = featureId;
       renderDrawer({ focusClose: focusDrawer });
@@ -948,9 +955,13 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
     function closeDrawer() {
       const returnId = state.lastFocusedCardId || state.selectedFeatureId;
+      const returnEl = state.drawerReturnFocusEl;
       state.selectedFeatureId = null;
+      state.drawerReturnFocusEl = null;
       renderDrawer();
-      if (returnId) {
+      if (returnEl && returnEl.isConnected && typeof returnEl.focus === "function") {
+        returnEl.focus();
+      } else if (returnId) {
         const trigger = document.querySelector('[data-feature-id="' + CSS.escape(returnId) + '"]');
         if (trigger && typeof trigger.focus === "function") {
           trigger.focus();
@@ -1484,8 +1495,12 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
       function fitView() {
         const { vw, vh } = getViewportSize();
-        const rawScale = Math.min(1, (vw - 56) / stageW, (vh - 56) / stageH);
-        cam.scale = clamp(rawScale, MIN_ZOOM, 1);
+        // Fit uses the exact computed scale with no arbitrary floor, so every node stays
+        // visible no matter how wide the layer grows. Guards only against degenerate
+        // stage dimensions; the result is always positive because vw/vh exceed the margin.
+        const safeW = stageW > 0 ? stageW : 1;
+        const safeH = stageH > 0 ? stageH : 1;
+        cam.scale = Math.min(1, (vw - 56) / safeW, (vh - 56) / safeH);
         const scaledW = stageW * cam.scale;
         const scaledH = stageH * cam.scale;
         cam.tx = Math.round((vw - scaledW) / 2);
@@ -1495,7 +1510,9 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       }
 
       function zoomAt(nextScale, cx, cy) {
-        const clamped = clamp(nextScale, MIN_ZOOM, MAX_ZOOM);
+        // Below the interactive floor (right after a deep fit) the floor follows the
+        // camera, so zooming out can never bounce the view back in with a jump.
+        const clamped = clamp(nextScale, Math.min(MIN_ZOOM, cam.scale), MAX_ZOOM);
         if (Math.abs(clamped - cam.scale) < 0.0001) return;
         const worldX = (cx - cam.tx) / cam.scale;
         const worldY = (cy - cam.ty) / cam.scale;
@@ -1820,6 +1837,11 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         backdrop.setAttribute("aria-hidden", "true");
         drawer.innerHTML = "";
         state.drawerFeatureId = null;
+        // A selected feature that vanished from the data must leave no stale selection:
+        // hiding the drawer without clearing it blocked graph shortcuts and Escape.
+        state.selectedFeatureId = null;
+        state.lastFocusedCardId = null;
+        state.drawerReturnFocusEl = null;
       };
       if (!state.selectedFeatureId || !state.data) {
         clearDrawer();
@@ -2025,19 +2047,29 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       document.getElementById("filter-search").value = "";
       renderAll();
     });
-    document.getElementById("drawer-backdrop").addEventListener("click", (e) => {
-      if (e.target.id === "drawer-backdrop") {
+    const drawerBackdrop = document.getElementById("drawer-backdrop");
+    let backdropPressBegan = false;
+    drawerBackdrop.addEventListener("pointerdown", (e) => {
+      // Chromium targets the click at the common ancestor of the press and release points:
+      // a drag starting inside the drawer and ending on the backdrop must not close it.
+      backdropPressBegan = e.target === drawerBackdrop;
+    });
+    drawerBackdrop.addEventListener("click", (e) => {
+      const genuineBackdropPress = backdropPressBegan && e.target === drawerBackdrop;
+      backdropPressBegan = false;
+      if (genuineBackdropPress) {
         closeDrawer();
       }
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        if (state.healthPanelOpen) {
+        // Dismiss the foremost surface first: the drawer overlays the health panel.
+        if (state.selectedFeatureId) {
+          closeDrawer();
+        } else if (state.healthPanelOpen) {
           state.healthPanelOpen = false;
           renderHealthPanel();
           document.getElementById("health-badge").focus();
-        } else if (state.selectedFeatureId) {
-          closeDrawer();
         }
       } else if (state.viewMode === "graph" && activeGraphApi && !state.selectedFeatureId) {
         const activeTag = document.activeElement && document.activeElement.tagName;

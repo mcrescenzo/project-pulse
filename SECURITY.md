@@ -29,7 +29,7 @@ Project Pulse is a local developer tool. The parts that matter for security:
     - carry the **access token**: either the `HttpOnly; SameSite=Strict` cookie set by the `?t=<token>` URL that `pp view` prints and opens, or an `X-PP-Access-Token` header.
   - State-changing requests also need a JSON content type, a same-origin `Origin`, and a same-origin `Sec-Fetch-Site`.
   - Responses forbid framing.
-  - The token is stored at `~/.config/project-pulse/access-token` (mode 0600; override the directory with `PROJECT_PULSE_HOME`). Delete that file to rotate the token.
+  - The token is stored at `~/.config/project-pulse/access-token` (mode 0600; override the directory with `PROJECT_PULSE_HOME`). Rotating the token requires a restart: running servers keep the token they loaded at startup, so stop all dashboard processes, delete that file, then start the dashboard again. The restarted server issues a fresh token, and old session cookies and `?t=…` links stop working.
 - **`pp mcp`** talks over stdio only and opens no network listener.
 - **`pp view --tui`** has no network surface.
 - **Subprocesses** (`bd`, `git`, and the OS browser opener) are always called with argument arrays, never through a shell.

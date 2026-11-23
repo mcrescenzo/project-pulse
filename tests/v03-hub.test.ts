@@ -69,6 +69,23 @@ async function readSseUntilEvent(
   return buffer;
 }
 
+/** Reads a spawned process's stdout until `marker` appears (or the stream ends). */
+async function readStdoutUntil(
+  proc: { stdout: ReadableStream<Uint8Array> },
+  marker: string
+): Promise<string> {
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  while (!out.includes(marker)) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    out += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel();
+  return out;
+}
+
 function makeRepo(nameDir: string, projectName: string, featureId: string): string {
   const repoDir = join(tempRoot, nameDir);
   mkdirSync(repoDir, { recursive: true });
@@ -128,6 +145,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(joinA.slug).toBe("alpha-repo");
     expect(joinA.url).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo`);
     expect(joinA.openUrl).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo?t=${hub.accessToken}`);
+    expect(joinA.overviewUrl).toBe(`http://127.0.0.1:${hub.port}/?t=${hub.accessToken}`);
     expect((await fetch(`${hub.url}/p/alpha-repo/api/roadmap`)).status).toBe(401);
     expect(statSync(join(stateDir, `projects.${hub.port}.json`)).mode & 0o777).toBe(0o600);
 
@@ -298,6 +316,8 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(started.mode).toBe("started");
     if (started.mode === "started") {
       hub = started.handle;
+      // Overview link is tokenized for the first-visit cookie exchange (fresh-browser usable)
+      expect(started.overviewUrl).toBe(hub.openUrl);
     }
     await joinOrStartHub(repoB, { port: hub!.port, stateDir });
 
@@ -335,6 +355,69 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     }
   }, BROWSER_TEST_TIMEOUT_MS);
 
+  testUi(
+    "every --no-open landing link opens the dashboard in a fresh browser via the token exchange",
+    async () => {
+      const repoA = makeRepo("link-start", "Link Start", "feat-start");
+      const repoB = makeRepo("link-join", "Link Join", "feat-join");
+      const cliPath = join(import.meta.dir, "../src/cli.ts");
+      const spawnView = (args: string[]) =>
+        Bun.spawn([process.execPath, "run", cliPath, "view", "--no-open", ...args], {
+          env: { ...process.env, PROJECT_PULSE_HOME: stateDir },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+
+      // Initial start prints two links (overview + project); joining prints the same pair.
+      const startProc = spawnView(["--root", repoA, "--port", "0"]);
+      try {
+        const startOut = await readStdoutUntil(startProc, "Project Pulse hub listening at ");
+        const startUrls = startOut.match(/https?:\/\/[^\s)]+/g) ?? [];
+        expect(startUrls).toHaveLength(2);
+        const startPort = new URL(startUrls[0]!).port;
+
+        const joinProc = spawnView(["--root", repoB, "--port", startPort]);
+        const joinOut = await readStdoutUntil(joinProc, "Joined Project Pulse hub at ");
+        expect(await joinProc.exited).toBe(0);
+        const joinUrls = joinOut.match(/https?:\/\/[^\s)]+/g) ?? [];
+        expect(joinUrls).toHaveLength(2);
+
+        // Every advertised link carries the persistent access token for the ?t= cookie exchange,
+        // and each opens the right page in a fresh browser context (no pre-set cookie).
+        const persistentToken = readFileSync(join(stateDir, "access-token"), "utf8").trim();
+        const featureByPath: Record<string, string> = {
+          "/p/link-start": "feat-start",
+          "/p/link-join": "feat-join",
+        };
+        browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+        for (const url of [...startUrls, ...joinUrls]) {
+          const advertised = new URL(url);
+          expect(advertised.searchParams.get("t")).toBe(persistentToken);
+
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          try {
+            await page.goto(url, { waitUntil: "networkidle" });
+            expect(new URL(page.url()).search).toBe("");
+            const featureId = featureByPath[new URL(page.url()).pathname];
+            if (featureId) {
+              await page.waitForSelector(`.card[data-feature-id="${featureId}"]`);
+            } else {
+              await page.waitForSelector('.project-card[data-project-slug="link-start"]');
+              await page.waitForSelector('.project-card[data-project-slug="link-join"]');
+            }
+          } finally {
+            await context.close();
+          }
+        }
+      } finally {
+        startProc.kill("SIGTERM");
+        await startProc.exited;
+      }
+    },
+    BROWSER_TEST_TIMEOUT_MS
+  );
+
   test("CLI pp view joins running hub and --standalone runs isolated server", async () => {
     const repoA = makeRepo("cli-hub-a", "CLI Hub A", "feat-a");
     const repoB = makeRepo("cli-standalone", "CLI Standalone", "feat-b");
@@ -361,6 +444,10 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(joinOut).toContain(
       `Joined Project Pulse hub at http://127.0.0.1:${hub.port}/p/cli-hub-a?t=${hub.accessToken}`
     );
+    // Every advertised landing link is tokenized, overview included, so a fresh browser can open
+    // each one via the ?t= cookie exchange; the raw overview URL is never advertised as a link.
+    expect(joinOut).toContain(`(overview: http://127.0.0.1:${hub.port}/?t=${hub.accessToken})`);
+    expect(joinOut).not.toContain(`(overview: http://127.0.0.1:${hub.port}/)`);
 
     // 2. CLI pp view --standalone starts isolated server cleanly even with --port
     const standaloneProc = Bun.spawn(
