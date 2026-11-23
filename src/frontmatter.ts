@@ -44,8 +44,25 @@ export function parseMarkdownFile(raw: string): ParsedMarkdownFile {
 
   return {
     frontmatter: parsed as Record<string, unknown>,
-    body: body.trim(),
+    body: trimMarkdownBody(body),
   };
+}
+
+/**
+ * Trims blank-line padding from the ends of a Markdown body while preserving
+ * the indentation of the first content line (pp-f7m.37): `String.trim` would
+ * also strip the four leading spaces of a first-line indented code block,
+ * which are Markdown syntax, not padding. Only whole blank lines
+ * (whitespace-only, plus the newlines separating them from the content) count
+ * as padding; the whitespace of the first content line is content and
+ * survives, so the canonical `---\n<body>\n` serialization stays byte-stable
+ * across save/reload cycles.
+ */
+export function trimMarkdownBody(body: string): string {
+  const first = body.search(/\S/);
+  if (first === -1) return "";
+  const lineStart = body.lastIndexOf("\n", first) + 1;
+  return body.slice(lineStart).trimEnd();
 }
 
 function cleanYamlOutput(rawYaml: string): string {
@@ -97,7 +114,7 @@ function yamlForStore(orderedObject: Record<string, unknown>): string {
 
 function serializeYamlFrontmatter(orderedObject: Record<string, unknown>, body: string): string {
   const yaml = yamlForStore(orderedObject);
-  const trimmedBody = body.trim();
+  const trimmedBody = trimMarkdownBody(body);
   if (!trimmedBody) {
     return `---\n${yaml}\n---\n`;
   }

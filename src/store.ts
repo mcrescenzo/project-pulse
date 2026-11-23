@@ -1044,7 +1044,9 @@ export class RoadmapService {
       nextRefs = dedupeStrings([...nextRefs, ...patch.addRefs]);
     }
     if (patch.removeRefs && patch.removeRefs.length > 0) {
-      const toRemove = new Set(patch.removeRefs);
+      // Trim removals like dedupeStrings trims adds (pp-f7m.38): " bd:x " was
+      // stored as "bd:x", so a verbatim lookup would silently keep it.
+      const toRemove = new Set(patch.removeRefs.map((r) => r.trim()).filter(Boolean));
       nextRefs = nextRefs.filter((r) => !toRemove.has(r));
     }
 

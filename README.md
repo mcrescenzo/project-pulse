@@ -26,7 +26,7 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 - **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server. Values are written with round-trip-verified YAML, so titles that look like numbers, booleans, or dates — or end in a colon — survive add, reload, and `pp check` byte-exact on every supported Bun (1.3+).
 - **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
 - **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
-- **Agent-ready:** token-lean `pp summary`, `--json` on every command, a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
+- **Agent-ready:** token-lean `pp summary`, machine-readable `--json` output on every data command (the interactive `pp view` and `pp mcp` servers are the exceptions), a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
 - **Dashboards:** a multi-project local hub with cards, dependency graph, and status board views, plus live reload and quick actions. There's also a TUI for SSH and tmux.
 - **Reporting:** `pp digest` for recent activity, `pp changelog` for release notes, and `pp export --html` for a self-contained offline snapshot.
 - **Optional [Beads](https://github.com/steveyegge/beads) integration:** link features to `bd:<id>` issues to see their live status and detect drift. Read-only, and entirely optional.
@@ -70,7 +70,7 @@ Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.pro
 
 | Command | Description |
 | :--- | :--- |
-| `pp` | Runs `summary` if the repo is initialized, otherwise shows help. |
+| `pp` | Runs `summary` if the repo is initialized, otherwise shows help (with `--json`: `{"ok":true,"initialized":false}` plus a next-step message). |
 | `pp init [--name <name>] [--summary <text>] [--agents-snippet] [--force]` | Creates `.project-pulse/` and generates `ROADMAP.md`. |
 | `pp setup [--mcp <path>] [--with-skill] [--dry-run]` | Idempotently wires up `AGENTS.md` instructions, MCP server config, and an optional agent skill file. |
 | `pp summary [--milestone <id>] [--status <s>] [--json]` | Token-lean overview of milestones, features, criteria progress, and latest notes. |
@@ -88,17 +88,19 @@ Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.pro
 | `pp view --tui [--no-beads]` | Interactive terminal dashboard. |
 | `pp mcp` | Stdio MCP server. |
 
-Every command accepts `--root <dir>` (default: the nearest parent directory containing `.project-pulse/`), and most accept `--json`.
+Every command accepts `--root <dir>` (default: the nearest parent directory containing `.project-pulse/`). Every command that prints roadmap data also accepts `--json` for machine-readable output. The exceptions are the interactive servers: `pp view` prints human-readable startup text, and `pp mcp` speaks JSON-RPC over stdio — for both, `--json` (a CLI data-output flag, not a protocol switch) does not apply and is rejected.
+
+Flag values that would look like options are passed with `=` syntax (for example `--title=--json`). A value given as a separate argument must not be an option token, and numeric flags reject blank values instead of silently coercing them to `0`; negative numbers such as `--order -5` stay valid.
 
 ## Browser dashboard (`pp view`)
 
 `pp view` starts a local hub on `http://127.0.0.1:4310`, or joins one that's already running, and opens your project at `/p/<repo>`. Run it in several repositories and they all appear on the hub's overview page. `--standalone` runs a single-project server instead.
 
 The dashboard is protected by an **access token**:
-- `pp view` prints and opens a URL ending in `?t=<token>`.
-- Your browser exchanges that token for a session cookie, so bookmarks keep working afterwards.
-- With `--no-open`, copy the printed URL into your browser.
-- The token is stored at `~/.config/project-pulse/access-token` (mode 0600). Set `PROJECT_PULSE_HOME` to use a different directory, and delete the file to rotate the token.
+- Every URL `pp view` prints (in `--no-open` mode or otherwise) ends in `?t=<token>`: your project's `/p/<repo>` link, the hub's portfolio overview link (`/?t=<token>`), and the standalone dashboard link.
+- Your browser exchanges that token for a session cookie, so bookmarks keep working afterwards. Any printed link works in a fresh browser; opening the bare overview URL without the token shows the access-required page until the cookie is set.
+- With `--no-open`, copy any printed URL into your browser.
+- The token is stored at `~/.config/project-pulse/access-token` (mode 0600); set `PROJECT_PULSE_HOME` to move it. To rotate it, stop all dashboard processes, delete that file, and start `pp view` again: the restart mints and persists a fresh token, and old `?t=` links and cookies stop working. A server running while the file is deleted captured the token at startup, so it keeps honoring old links and cookies until it exits; restarting without deleting preserves the token.
 
 See [SECURITY.md](SECURITY.md) for the full model.
 

@@ -237,3 +237,96 @@ describe("Slice 1b: Milestone & Feature Authoring CLI Commands + Auto-Sync", () 
     expect((await runCli(["check"])).code).toBe(0);
   });
 });
+
+describe("Slice 1b regressions: body indentation and ref trimming", () => {
+  test("an initial indented code block survives add/update, reload, and rendering (pp-f7m.37)", async () => {
+    expect((await runCli(["init", "--name", "Code Block Demo"])).code).toBe(0);
+
+    const description = "    const pinned = load();\n\nPlain paragraph after the snippet.";
+    const fAdd = await runCli([
+      "feature",
+      "add",
+      "snippet",
+      "--title",
+      "Snippet",
+      "--description",
+      description,
+      "--json",
+    ]);
+    expect(fAdd.code).toBe(0);
+    expect(JSON.parse(fAdd.stdout).feature.description).toBe(description);
+
+    // Serialization keeps the canonical `---\n<body>\n` convention (content
+    // starts on the line after the closing delimiter) with the code block's
+    // four leading spaces intact.
+    const featurePath = join(tempDir, ".project-pulse/features/snippet.md");
+    expect(readFileSync(featurePath, "utf8")).toContain(
+      "---\n    const pinned = load();\n\nPlain paragraph after the snippet.\n"
+    );
+
+    // A later mutation reloads and re-serializes the file; the indentation
+    // must survive that round-trip unchanged.
+    const fUpd = await runCli(["feature", "update", "snippet", "--status", "in-progress", "--json"]);
+    expect(fUpd.code).toBe(0);
+    expect(JSON.parse(fUpd.stdout).feature.description).toBe(description);
+    expect(readFileSync(featurePath, "utf8")).toContain(
+      "---\n    const pinned = load();\n\nPlain paragraph after the snippet.\n"
+    );
+
+    // Rendering keeps the indented first line as its own roadmap line.
+    const roadmapLines = readFileSync(join(tempDir, "ROADMAP.md"), "utf8").split("\n");
+    expect(roadmapLines).toContain("    const pinned = load();");
+
+    const mAdd = await runCli([
+      "milestone",
+      "add",
+      "setup",
+      "--title",
+      "Setup",
+      "--description",
+      "    mkdir -p store\n\nSetup steps.",
+      "--json",
+    ]);
+    expect(mAdd.code).toBe(0);
+    expect(readFileSync(join(tempDir, "ROADMAP.md"), "utf8").split("\n")).toContain(
+      "    mkdir -p store"
+    );
+  });
+
+  test("removing a whitespace-padded ref removes the stored reference (pp-f7m.38)", async () => {
+    expect((await runCli(["init", "--name", "Ref Trim Demo"])).code).toBe(0);
+
+    const fAdd = await runCli([
+      "feature",
+      "add",
+      "refs-demo",
+      "--title",
+      "Refs Demo",
+      "--ref",
+      "  bd:pp-9  ",
+      "--json",
+    ]);
+    expect(fAdd.code).toBe(0);
+    // Adding trims: the stored ref is the trimmed id.
+    expect(JSON.parse(fAdd.stdout).feature.refs).toEqual(["bd:pp-9"]);
+
+    // Removing the same pasted ref, still whitespace-padded, must match it.
+    const fRemove = await runCli([
+      "feature",
+      "update",
+      "refs-demo",
+      "--remove-ref",
+      " bd:pp-9 ",
+      "--json",
+    ]);
+    expect(fRemove.code).toBe(0);
+    expect(JSON.parse(fRemove.stdout).feature.refs).toEqual([]);
+
+    const featureBody = readFileSync(join(tempDir, ".project-pulse/features/refs-demo.md"), "utf8");
+    expect(featureBody).not.toContain("bd:pp-9");
+
+    const roadmap = readFileSync(join(tempDir, "ROADMAP.md"), "utf8");
+    expect(roadmap).not.toContain("bd:pp-9");
+    expect((await runCli(["check"])).code).toBe(0);
+  });
+});

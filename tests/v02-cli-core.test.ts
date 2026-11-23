@@ -310,4 +310,107 @@ describe("v0.2 CLI Ergonomics & Core Store Hardening", () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.errors[0].code).toBe("CONFIG_PARSE_ERROR");
   });
+
+  test("missing flag values and blank numeric input are rejected before side effects; '=' passes literal option-like values", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "ArgGuard" });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "active" });
+
+    // '--milestone --json' must not swallow the --json switch: it is a missing value, rejected
+    // before any feature file is created.
+    const swallowedSwitch = await captureConsole(() =>
+      runCli(["feature", "add", "feat-1", "--title", "Feat", "--milestone", "--json"], {
+        cwd: tempDir,
+      })
+    );
+    expect(swallowedSwitch.code).toBe(1);
+    // '--json' in argv makes even parse errors print JSON ({ok:false}) on stdout
+    expect(JSON.parse(swallowedSwitch.stdout).error).toContain("Missing value for flag --milestone");
+    expect(existsSync(join(tempDir, ".project-pulse/features/feat-1.md"))).toBe(false);
+
+    // Missing value at end of argv
+    const dangling = await captureConsole(() =>
+      runCli(["summary", "--milestone"], { cwd: tempDir })
+    );
+    expect(dangling.code).toBe(1);
+    expect(dangling.stderr).toContain("Missing value for flag --milestone");
+
+    // Whitespace-only and empty numeric values are rejected instead of silently becoming 0
+    const blankOrder = await captureConsole(() =>
+      runCli(["milestone", "add", "m1", "--title", "M1", "--order", "  "], { cwd: tempDir })
+    );
+    expect(blankOrder.code).toBe(1);
+    expect(blankOrder.stderr).toContain("must be a finite number");
+    expect(existsSync(join(tempDir, ".project-pulse/milestones/m1.md"))).toBe(false);
+
+    const emptyOrder = await captureConsole(() =>
+      runCli(["milestone", "add", "m2", "--title", "M2", "--order="], { cwd: tempDir })
+    );
+    expect(emptyOrder.code).toBe(1);
+    expect(emptyOrder.stderr).toContain("must be a finite number");
+    expect(existsSync(join(tempDir, ".project-pulse/milestones/m2.md"))).toBe(false);
+
+    // Negative numbers remain valid as separate arguments
+    const negOrder = await captureConsole(() =>
+      runCli(["milestone", "add", "m3", "--title", "M3", "--order", "-5", "--json"], {
+        cwd: tempDir,
+      })
+    );
+    expect(negOrder.code).toBe(0);
+    expect(JSON.parse(negOrder.stdout).milestone.order).toBe(-5);
+
+    // Literal option-like values pass through '=' syntax while --json stays a recognized switch
+    const literalFlag = await captureConsole(() =>
+      runCli(["milestone", "add", "m4", "--title", "M4", "--description=--json", "--json"], {
+        cwd: tempDir,
+      })
+    );
+    expect(literalFlag.code).toBe(0);
+    expect(JSON.parse(literalFlag.stdout).ok).toBe(true);
+    expect(svc.load().milestones.find((m) => m.id === "m4")?.description).toBe("--json");
+  });
+
+  test("--json stays machine-readable only on data commands; bare pp --json is predictable when uninitialized", async () => {
+    // Bare 'pp --json' in an uninitialized repo: predictable JSON outcome, human default keeps help
+    const uninitDir = mkdtempSync(join(tmpdir(), "project-pulse-uninit-json-"));
+    try {
+      const bareJson = await captureConsole(() => runCli(["--json"], { cwd: uninitDir }));
+      expect(bareJson.code).toBe(0);
+      const bareJsonPayload = JSON.parse(bareJson.stdout);
+      expect(bareJsonPayload.ok).toBe(true);
+      expect(bareJsonPayload.initialized).toBe(false);
+
+      const bareHuman = await captureConsole(() => runCli([], { cwd: uninitDir }));
+      expect(bareHuman.code).toBe(0);
+      expect(bareHuman.stdout).toContain("Usage:");
+    } finally {
+      rmSync(uninitDir, { recursive: true, force: true });
+    }
+
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "JsonScope" });
+
+    // Interactive servers reject --json instead of pretending to emit it
+    const viewJson = await captureConsole(() => runCli(["view", "--json"], { cwd: tempDir }));
+    expect(viewJson.code).toBe(1);
+    expect(JSON.parse(viewJson.stdout).error).toContain("--json");
+
+    const mcpJson = await captureConsole(() => runCli(["mcp", "--json"], { cwd: tempDir }));
+    expect(mcpJson.code).toBe(1);
+    expect(JSON.parse(mcpJson.stdout).error).toContain("--json");
+
+    const tuiJson = await captureConsole(() =>
+      runCli(["view", "--tui", "--json"], { cwd: tempDir })
+    );
+    expect(tuiJson.code).toBe(1);
+    expect(JSON.parse(tuiJson.stdout).error).toContain("--tui");
+
+    // Data commands keep emitting parseable JSON, and help no longer promises JSON everywhere
+    const summaryJson = await captureConsole(() => runCli(["summary", "--json"], { cwd: tempDir }));
+    expect(summaryJson.code).toBe(0);
+    expect(JSON.parse(summaryJson.stdout).project.name).toBe("JsonScope");
+
+    const helpOut = await captureConsole(() => runCli(["--help"], { cwd: tempDir }));
+    expect(helpOut.stdout).toContain("not on 'pp view' or 'pp mcp'");
+  });
 });
