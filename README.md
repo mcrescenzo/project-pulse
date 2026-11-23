@@ -23,7 +23,7 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 
 ## Features
 
-- **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server. Values are written with round-trip-verified YAML, so titles that look like numbers, booleans, or dates — or end in a colon — survive add, reload, and `pp check` byte-exact on every supported Bun (1.3+).
+- **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server. Values are written with round-trip-verified YAML, so titles that look like numbers, booleans, or dates — or end in a colon — survive add, reload, and `pp check` byte-exact on every supported runtime (Node.js 24+, Bun 1.3+).
 - **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
 - **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
 - **Agent-ready:** token-lean `pp summary`, machine-readable `--json` output on every data command (the interactive `pp view` and `pp mcp` servers are the exceptions), a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
@@ -33,7 +33,24 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 
 ## Install
 
-Project Pulse runs on [Bun](https://bun.sh/) **1.3+**. npm distribution is planned for v1.0.
+Project Pulse runs on **Node.js 24+** or **[Bun](https://bun.sh/) 1.3+** — one built-in SQLite engine on either runtime, no native dependencies, no install-time downloads.
+
+```bash
+# Run once, no global install
+npx project-pulse@latest summary
+
+# Install globally (installs both `pp` and `project-pulse`)
+npm install -g project-pulse
+pp --version
+
+# Bun-only environments: bunx executes the installed artifact with Bun
+bunx --bun project-pulse@latest --version
+```
+
+`project-pulse` and `pp` are the same CLI. Plain `bunx project-pulse` also works (it honors the artifact's Node shebang); `bunx --bun` is for hosts where you want Bun to execute it.
+
+<details>
+<summary>Run from a source checkout instead of npm</summary>
 
 ```bash
 git clone https://github.com/mcrescenzo/project-pulse.git
@@ -43,7 +60,8 @@ bun link           # puts `pp` and `project-pulse` on your PATH
 pp --version
 ```
 
-You can also skip linking and run it in place with `bun run /path/to/project-pulse/src/cli.ts <command>`.
+You can also skip linking and run it in place with `bun run /path/to/project-pulse/src/cli.ts <command>` (Bun) or `bun run build && node dist/cli.js <command>` (Node).
+</details>
 
 ## Quick start
 
@@ -143,7 +161,7 @@ Or configure the MCP server yourself:
 }
 ```
 
-If `pp` isn't on your PATH, use `"command": "bun", "args": ["run", "/path/to/project-pulse/src/cli.ts", "mcp"]`.
+If `pp` isn't on your PATH, point `command` at the absolute built CLI, e.g. `"command": "node", "args": ["/path/to/project-pulse/dist/cli.js", "mcp"]` (or `"command": "bun", "args": ["run", "/path/to/project-pulse/src/cli.ts", "mcp"]`).
 
 MCP tools: `roadmap_summary`, `roadmap_show_feature`, `roadmap_upsert_milestone`, `roadmap_upsert_feature`, `roadmap_log_pulse`, `roadmap_check`.
 
