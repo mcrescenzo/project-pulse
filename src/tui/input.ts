@@ -296,6 +296,12 @@ export interface TerminalSession {
   copyToClipboard(text: string): void;
   onInput(cb: (ev: InputEvent) => void): () => void;
   onResize(cb: (w: number, h: number) => void): () => void;
+  /**
+   * Registers a callback fired after the session restored the terminal on SIGINT/SIGTERM/SIGHUP
+   * so the owner can finish teardown (cancel pending work, resolve its run promise). Optional:
+   * test doubles may omit it.
+   */
+  onSignal?(cb: () => void): () => void;
 }
 
 export function buildMouseModeEscapes(opts: { enabled: boolean; hover: boolean }): string {
@@ -313,6 +319,7 @@ export class NodeTerminalSession implements TerminalSession {
   private readonly decoder = new InputDecoder();
   private readonly inputListeners = new Set<(ev: InputEvent) => void>();
   private readonly resizeListeners = new Set<(w: number, h: number) => void>();
+  private readonly signalListeners = new Set<() => void>();
   private entered = false;
   private escTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -341,7 +348,10 @@ export class NodeTerminalSession implements TerminalSession {
   };
 
   private readonly handleSignal = () => {
+    // Restore the terminal FIRST, then notify so teardown (cancelling pending reloads,
+    // resolving the run promise) completes before any late frame could be written.
     this.leave();
+    for (const cb of Array.from(this.signalListeners)) cb();
   };
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
@@ -428,6 +438,13 @@ export class NodeTerminalSession implements TerminalSession {
     this.resizeListeners.add(cb);
     return () => {
       this.resizeListeners.delete(cb);
+    };
+  }
+
+  onSignal(cb: () => void): () => void {
+    this.signalListeners.add(cb);
+    return () => {
+      this.signalListeners.delete(cb);
     };
   }
 }
