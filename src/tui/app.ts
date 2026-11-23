@@ -15,7 +15,7 @@ import {
   type WaterfallLayout,
 } from "./graph";
 import { encodeOsc52Copy, NodeTerminalSession, type InputEvent, type KeyEvent, type MouseEvent, type TerminalSession } from "./input";
-import { diffBuffers, ScreenBuffer, TUI_PALETTE, type HitRegion } from "./screen";
+import { diffBuffers, ScreenBuffer, segmentText, TUI_PALETTE, type HitRegion } from "./screen";
 import {
   buildPickerOptions,
   computeFilteredData,
@@ -40,6 +40,18 @@ export interface TuiControllerOptions {
   noBeads?: boolean;
   session: TerminalSession;
   onExit?: () => void;
+}
+
+/**
+ * True when a key event should be typed into the note editor or search field.
+ * Accepts exactly one printable code point, including supplementary characters
+ * (emoji occupy two UTF-16 units); named keys like "up" or "enter" are rejected.
+ */
+function isPrintableTextInput(key: string): boolean {
+  if (key.length === 0 || key.length > 2) return false;
+  const cp = key.codePointAt(0)!;
+  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return false;
+  return key.length === 1 || cp >= 0x10000;
 }
 
 /**
@@ -324,12 +336,12 @@ export class TuiController {
         return;
       }
       if (ev.key === "backspace") {
-        this.state.search = this.state.search.slice(0, -1);
+        this.state.search = segmentText(this.state.search).slice(0, -1).join("");
         this.state.cardsScrollY = 0;
         this.render();
         return;
       }
-      if (!ev.ctrl && !ev.alt && ev.key.length === 1) {
+      if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
         this.state.search += ev.key;
         this.state.cardsScrollY = 0;
         this.render();
@@ -378,7 +390,7 @@ export class TuiController {
       if (ev.key === "tab") {
         this.state.drawerFocus = this.state.drawerFocus === "criteria" ? "note" : "criteria";
         if (this.state.drawerFocus === "note") {
-          this.state.noteCursor = Array.from(
+          this.state.noteCursor = segmentText(
             this.state.noteDrafts[this.state.drawerFeatureId] ?? ""
           ).length;
         }
@@ -889,7 +901,7 @@ export class TuiController {
 
   private focusDrawerNote(featureId: string): void {
     this.state.drawerFocus = "note";
-    this.state.noteCursor = Array.from(this.state.noteDrafts[featureId] ?? "").length;
+    this.state.noteCursor = segmentText(this.state.noteDrafts[featureId] ?? "").length;
     this.render();
   }
 
@@ -956,7 +968,7 @@ export class TuiController {
       this.submitPulseNote(featureId);
       return;
     }
-    const glyphs = Array.from(this.state.noteDrafts[featureId] ?? "");
+    const glyphs = segmentText(this.state.noteDrafts[featureId] ?? "");
     let cursor = Math.max(0, Math.min(this.state.noteCursor, glyphs.length));
     if (ev.key === "left") {
       this.state.noteCursor = Math.max(0, cursor - 1);
@@ -997,7 +1009,7 @@ export class TuiController {
       }
       return;
     }
-    if (!ev.ctrl && !ev.alt && ev.key.length === 1) {
+    if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
       glyphs.splice(cursor, 0, ev.key);
       this.state.noteDrafts[featureId] = glyphs.join("");
       this.state.noteCursor = cursor + 1;

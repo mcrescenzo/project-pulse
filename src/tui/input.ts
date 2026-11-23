@@ -158,120 +158,155 @@ function isIncompleteEscPrefix(buf: string): boolean {
 }
 
 /**
+ * Byte length of the UTF-8 code point starting at `bytes[i]` (stray continuation bytes count as 1).
+ */
+function utf8CodePointLength(bytes: Uint8Array, i: number): number {
+  const b = bytes[i]!;
+  if (b < 0x80) return 1;
+  if (b >= 0xf0) return 4;
+  if (b >= 0xe0) return 3;
+  if (b >= 0xc0) return 2;
+  return 1;
+}
+
+function emitPlainText(text: string, events: InputEvent[]): void {
+  let i = 0;
+  while (i < text.length) {
+    const cp = text.codePointAt(i)!;
+    const ch = String.fromCodePoint(cp);
+    i += ch.length;
+    if (ch === "\r" || ch === "\n") {
+      events.push({ type: "key", key: "enter", raw: ch });
+    } else if (ch === "\t") {
+      events.push({ type: "key", key: "tab", raw: ch });
+    } else if (ch === "\x7f" || ch === "\b") {
+      events.push({ type: "key", key: "backspace", raw: ch });
+    } else if (cp >= 1 && cp <= 26) {
+      events.push({ type: "key", key: String.fromCharCode(96 + cp), ctrl: true, raw: ch });
+    } else if (cp >= 32) {
+      events.push({ type: "key", key: ch, raw: ch });
+    }
+  }
+}
+
+/**
  * Stateful keyboard + SGR mouse parser resilient to split TCP/SSH chunks.
+ *
+ * Escape sequences are framed on raw bytes before UTF-8 decoding so legacy X10 mouse
+ * coordinate bytes (>= 0x80) are never mangled by text decoding.
  */
 export class InputDecoder {
   private readonly utf8 = new StringDecoder("utf8");
-  private pending = "";
+  private pending = Buffer.alloc(0);
 
   hasPendingEscape(): boolean {
-    return this.pending === "\x1b" || isIncompleteEscPrefix(this.pending);
+    if (this.pending.length === 0 || this.pending[0] !== 0x1b) return false;
+    if (this.pending.length === 1) return true;
+    return isIncompleteEscPrefix(this.pending.toString("latin1"));
   }
 
   flushPendingEscape(): InputEvent[] {
-    if (!this.pending) return [];
-    if (this.pending === "\x1b") {
-      this.pending = "";
+    // Only a lone ESC resolves to an Escape key press. Recognized incomplete CSI/SS3/SGR/X10
+    // prefixes stay buffered so a delayed suffix still completes into its one intended input.
+    if (this.pending.length === 1 && this.pending[0] === 0x1b) {
+      this.pending = Buffer.alloc(0);
       return [{ type: "key", key: "escape", raw: "\x1b" }];
     }
-    this.pending = "";
     return [];
   }
 
   feed(chunk: string | Buffer): InputEvent[] {
-    const text = typeof chunk === "string" ? chunk : this.utf8.write(chunk);
-    this.pending += text;
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+    this.pending =
+      this.pending.length === 0 ? Buffer.from(bytes) : Buffer.concat([this.pending, bytes]);
     const events: InputEvent[] = [];
+    let pos = 0;
 
-    while (this.pending.length > 0) {
-      if (this.pending[0] === "\x1b") {
-        if (this.pending.length >= 2 && this.pending[1] === "\x1b") {
-          events.push({ type: "key", key: "escape", raw: "\x1b" });
-          this.pending = this.pending.slice(1);
-          continue;
-        }
-
-        const mouseMatch = SGR_MOUSE_RE.exec(this.pending);
-        if (mouseMatch) {
-          events.push(
-            decodeSgrMouse(
-              Number(mouseMatch[1]),
-              Number(mouseMatch[2]),
-              Number(mouseMatch[3]),
-              mouseMatch[4]!
-            )
-          );
-          this.pending = this.pending.slice(mouseMatch[0].length);
-          continue;
-        }
-
-        if (this.pending.startsWith(X10_MOUSE_PREFIX)) {
-          if (this.pending.length < 6) {
-            break;
-          }
-          events.push(
-            decodeX10Mouse(
-              this.pending.charCodeAt(3),
-              this.pending.charCodeAt(4),
-              this.pending.charCodeAt(5)
-            )
-          );
-          this.pending = this.pending.slice(6);
-          continue;
-        }
-
-        const csiMatch = CSI_SEQ_RE.exec(this.pending);
-        if (csiMatch) {
-          const ev = decodeCsiKey(csiMatch[1] ?? "", csiMatch[2]!, csiMatch[0]);
-          if (ev) events.push(ev);
-          this.pending = this.pending.slice(csiMatch[0].length);
-          continue;
-        }
-
-        const ss3Match = SS3_SEQ_RE.exec(this.pending);
-        if (ss3Match) {
-          const mapped = CSI_KEY_MAP[ss3Match[1]!];
-          if (mapped) events.push({ type: "key", key: mapped, raw: ss3Match[0] });
-          this.pending = this.pending.slice(ss3Match[0].length);
-          continue;
-        }
-
-        if (isIncompleteEscPrefix(this.pending)) {
-          break;
-        }
-
-        if (this.pending.length >= 2) {
-          const altCh = this.pending[1]!;
-          if (altCh >= " " && altCh !== "\x7f") {
-            events.push({ type: "key", key: altCh, alt: true, raw: this.pending.slice(0, 2) });
-            this.pending = this.pending.slice(2);
-            continue;
-          }
-        }
-
-        this.pending = this.pending.slice(1);
-        events.push({ type: "key", key: "escape", raw: "\x1b" });
+    while (pos < this.pending.length) {
+      if (this.pending[pos] !== 0x1b) {
+        // Plain text run: decode bytes up to the next ESC via the stateful UTF-8 decoder
+        // (safe to split mid-run: ESC bytes never occur inside multi-byte UTF-8 sequences).
+        let end = pos + 1;
+        while (end < this.pending.length && this.pending[end] !== 0x1b) end++;
+        emitPlainText(this.utf8.write(this.pending.subarray(pos, end)), events);
+        pos = end;
         continue;
       }
 
-      const cp = this.pending.codePointAt(0)!;
-      const ch = String.fromCodePoint(cp);
-      this.pending = this.pending.slice(ch.length);
-
-      if (ch === "\r" || ch === "\n") {
-        events.push({ type: "key", key: "enter", raw: ch });
-      } else if (ch === "\t") {
-        events.push({ type: "key", key: "tab", raw: ch });
-      } else if (ch === "\x7f" || ch === "\b") {
-        events.push({ type: "key", key: "backspace", raw: ch });
-      } else if (cp >= 1 && cp <= 26) {
-        const letter = String.fromCharCode(96 + cp);
-        events.push({ type: "key", key: letter, ctrl: true, raw: ch });
-      } else if (cp >= 32) {
-        events.push({ type: "key", key: ch, raw: ch });
+      const rest = this.pending.subarray(pos);
+      if (rest.length >= 2 && rest[1] === 0x1b) {
+        events.push({ type: "key", key: "escape", raw: "\x1b" });
+        pos += 1;
+        continue;
       }
+
+      const latin = rest.toString("latin1");
+
+      const mouseMatch = SGR_MOUSE_RE.exec(latin);
+      if (mouseMatch) {
+        events.push(
+          decodeSgrMouse(
+            Number(mouseMatch[1]),
+            Number(mouseMatch[2]),
+            Number(mouseMatch[3]),
+            mouseMatch[4]!
+          )
+        );
+        pos += mouseMatch[0].length;
+        continue;
+      }
+
+      if (latin.startsWith(X10_MOUSE_PREFIX)) {
+        if (rest.length < 6) {
+          break;
+        }
+        events.push(decodeX10Mouse(rest[3]!, rest[4]!, rest[5]!));
+        pos += 6;
+        continue;
+      }
+
+      const csiMatch = CSI_SEQ_RE.exec(latin);
+      if (csiMatch) {
+        const ev = decodeCsiKey(csiMatch[1] ?? "", csiMatch[2]!, csiMatch[0]);
+        if (ev) events.push(ev);
+        pos += csiMatch[0].length;
+        continue;
+      }
+
+      const ss3Match = SS3_SEQ_RE.exec(latin);
+      if (ss3Match) {
+        const mapped = CSI_KEY_MAP[ss3Match[1]!];
+        if (mapped) events.push({ type: "key", key: mapped, raw: ss3Match[0] });
+        pos += ss3Match[0].length;
+        continue;
+      }
+
+      if (isIncompleteEscPrefix(latin)) {
+        break;
+      }
+
+      if (rest.length >= 2 && rest[1]! >= 0x20 && rest[1]! !== 0x7f) {
+        // Alt+char: decode exactly one code point's worth of bytes.
+        const len = Math.min(utf8CodePointLength(rest, 1), rest.length - 1);
+        events.push({
+          type: "key",
+          key: rest.subarray(1, 1 + len).toString("utf8"),
+          alt: true,
+          raw: latin.slice(0, 1 + len),
+        });
+        pos += 1 + len;
+        continue;
+      }
+
+      pos += 1;
+      events.push({ type: "key", key: "escape", raw: "\x1b" });
     }
 
+    if (pos >= this.pending.length) {
+      this.pending = Buffer.alloc(0);
+    } else {
+      this.pending = Buffer.from(this.pending.subarray(pos));
+    }
     return events;
   }
 }

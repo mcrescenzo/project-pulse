@@ -1,5 +1,5 @@
 import type { Feature, FeatureStatus } from "../types";
-import { ScreenBuffer, TUI_PALETTE, sanitizeTerminalText, truncateText, type CellStyle } from "./screen";
+import { ScreenBuffer, TUI_PALETTE, glyphCellWidth, sanitizeTerminalText, segmentText, textCellWidth, truncateText, type CellStyle } from "./screen";
 import { HitLayer, drawPill, getStatusStyle, type Rect, type TuiState } from "./views";
 
 export interface DrawerRectInfo extends Rect {
@@ -39,7 +39,7 @@ function wrapText(text: string, width: number): string[] {
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
-    const wLen = Array.from(w).length;
+    const wLen = textCellWidth(w);
     if (!line) {
       if (wLen <= safeW) {
         line = w;
@@ -49,7 +49,7 @@ function wrapText(text: string, width: number): string[] {
           lines.push(glyphs.slice(i, i + safeW).join(""));
         }
       }
-    } else if (Array.from(line).length + 1 + wLen <= safeW) {
+    } else if (textCellWidth(line) + 1 + wLen <= safeW) {
       line += " " + w;
     } else {
       lines.push(line);
@@ -110,7 +110,7 @@ class DrawerClipWriter {
     hit?: { id: string; kind: string; data?: unknown }
   ): number {
     const clean = ` ${label} `;
-    const len = Array.from(clean).length;
+    const len = textCellWidth(clean);
     const sy = this.toScreenY(vy);
     if (this.isVisible(sy) && vx >= this.clip.x && vx + len <= this.clip.x + this.clip.w) {
       this.buf.fillRect(vx, sy, len, 1, style);
@@ -441,14 +441,31 @@ export function renderFeatureDrawer(
         fg: TUI_PALETTE.muted,
       });
     } else {
-      const glyphs = Array.from(draft);
-      const cursor = Math.max(0, Math.min(state.noteCursor, glyphs.length));
-      const sliceStart = Math.max(0, cursor - innerTextW + 2);
-      shown = glyphs.slice(sliceStart, sliceStart + innerTextW - 1).join("");
-      const cursorCol = innerX + 1 + (cursor - sliceStart);
-      cw.write(innerX + 1, noteRowY, shown, innerTextW - 1, { fg: TUI_PALETTE.text });
+      // Position by grapheme clusters measured in terminal cells so wide and
+      // combining glyphs keep the cursor on the correct column.
+      const clusters = segmentText(draft);
+      const cursor = Math.max(0, Math.min(state.noteCursor, clusters.length));
+      const visibleCells = Math.max(1, innerTextW - 1);
+      const prefix = new Array<number>(clusters.length + 1);
+      prefix[0] = 0;
+      for (let i = 0; i < clusters.length; i++) {
+        prefix[i + 1] = prefix[i]! + glyphCellWidth(clusters[i]!);
+      }
+      // Scroll the window so the cursor sits inside the visible cell range,
+      // then extend over whole clusters while they still fit.
+      let sliceStart = 0;
+      while (sliceStart < cursor && prefix[cursor]! - prefix[sliceStart]! >= visibleCells) {
+        sliceStart++;
+      }
+      let sliceEnd = sliceStart;
+      while (sliceEnd < clusters.length && prefix[sliceEnd + 1]! - prefix[sliceStart]! <= visibleCells) {
+        sliceEnd++;
+      }
+      shown = clusters.slice(sliceStart, sliceEnd).join("");
+      const cursorCol = innerX + 1 + (prefix[cursor]! - prefix[sliceStart]!);
+      cw.write(innerX + 1, noteRowY, shown, visibleCells, { fg: TUI_PALETTE.text });
       if (isNoteFocused && cursorCol < innerX + boxW - 1) {
-        const atCursor = glyphs[cursor] ?? " ";
+        const atCursor = clusters[cursor] ?? " ";
         const sy = cw.toScreenY(noteRowY);
         if (cw.isVisible(sy)) {
           buf.put(cursorCol, sy, atCursor, { fg: TUI_PALETTE.bg, bg: TUI_PALETTE.accent, bold: true });
