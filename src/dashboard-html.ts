@@ -820,6 +820,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     }
     .dep-chip:hover { border-color: var(--accent); }
     .empty-msg { color: var(--muted); font-style: italic; }
+    .load-status { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--red-soft); color: var(--red); border: 1px solid rgba(248, 113, 113, 0.35); font-size: 0.88rem; }
   </style>
 </head>
 <body>
@@ -829,6 +830,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         ${switcherHtml}
         <h1 id="project-name">Loading roadmap…</h1>
         <p class="subtitle" id="project-summary"></p>
+        <div class="load-status" id="load-status" role="alert" hidden></div>
       </div>
       <div class="header-badges">
         ${liveBadgeInitial}
@@ -889,9 +891,12 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       search: "",
       showDeps: true,
       healthPanelOpen: false,
-      noteDrafts: {},
-      feedback: null,
+      noteDrafts: Object.create(null),
+      feedback: Object.create(null),
       saving: false,
+      drawerFeatureId: null,
+      readSeq: 0,
+      loadError: null,
       graphCamera: { scale: 1, tx: 0, ty: 0, initialized: false, layoutKey: "" },
     };
     let activeGraphApi = null;
@@ -944,7 +949,6 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     function closeDrawer() {
       const returnId = state.lastFocusedCardId || state.selectedFeatureId;
       state.selectedFeatureId = null;
-      state.feedback = null;
       renderDrawer();
       if (returnId) {
         const trigger = document.querySelector('[data-feature-id="' + CSS.escape(returnId) + '"]');
@@ -985,16 +989,37 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         renderAll();
         return;
       }
-      const res = await fetch(apiUrl("/api/roadmap"));
-      if (!res.ok) throw new Error("Failed to load /api/roadmap");
-      state.data = await res.json();
+      const seq = ++state.readSeq;
+      let payload = null;
+      let failure = null;
+      try {
+        const res = await fetch(apiUrl("/api/roadmap"));
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          const detail = body && typeof body.error === "string" && body.error ? body.error : "HTTP " + res.status;
+          throw new Error(detail);
+        }
+        payload = await res.json();
+      } catch (err) {
+        failure = err;
+      }
+      if (seq !== state.readSeq) return;
+      if (failure) {
+        state.loadError = (failure && failure.message) || "Failed to load roadmap";
+        renderLoadStatus();
+        console.error(failure);
+        return;
+      }
+      state.data = payload;
+      state.loadError = null;
       renderAll();
+      renderLoadStatus();
     }
 
     async function sendPulse(featureId, body, onSuccess) {
       if (PP_RUNTIME.mode === "static") return false;
       state.saving = true;
-      state.feedback = { kind: "saving", message: "Saving..." };
+      state.feedback[featureId] = { kind: "saving", message: "Saving..." };
       renderFeedback();
       try {
         const res = await fetch(apiUrl("/api/features/" + encodeURIComponent(featureId) + "/pulse"), {
@@ -1005,34 +1030,47 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Update failed" }));
           state.saving = false;
-          state.feedback = { kind: "err", message: err.error || "Update failed" };
+          state.feedback[featureId] = { kind: "err", message: err.error || "Update failed" };
           renderFeedback();
           return false;
         }
         if (typeof onSuccess === "function") onSuccess();
         state.saving = false;
-        state.feedback = { kind: "ok", message: "Saved" };
+        state.feedback[featureId] = { kind: "ok", message: "Saved" };
         await fetchRoadmap();
         return true;
       } catch (err) {
         state.saving = false;
-        state.feedback = { kind: "err", message: (err && err.message) || "Network error while saving" };
+        state.feedback[featureId] = { kind: "err", message: (err && err.message) || "Network error while saving" };
         renderFeedback();
         return false;
+      }
+    }
+
+    function renderLoadStatus() {
+      const el = document.getElementById("load-status");
+      if (!el) return;
+      if (state.loadError) {
+        el.textContent = "Roadmap refresh failed: " + state.loadError;
+        el.hidden = false;
+      } else {
+        el.textContent = "";
+        el.hidden = true;
       }
     }
 
     function renderFeedback() {
       const el = document.getElementById("drawer-feedback");
       if (!el) return;
-      if (!state.feedback) {
+      const feedback = state.drawerFeatureId ? state.feedback[state.drawerFeatureId] : null;
+      if (!feedback) {
         el.className = "drawer-feedback";
         el.textContent = "";
         return;
       }
-      const cls = state.feedback.kind === "err" ? "is-err" : state.feedback.kind === "saving" ? "is-saving" : "is-ok";
+      const cls = feedback.kind === "err" ? "is-err" : feedback.kind === "saving" ? "is-saving" : "is-ok";
       el.className = "drawer-feedback is-visible " + cls;
-      el.textContent = state.feedback.message;
+      el.textContent = feedback.message;
     }
 
     function renderHealthPanel() {
@@ -1140,7 +1178,8 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
                 const total = f.ship_criteria.length;
                 const criteriaPct = total > 0 ? Math.round((done / total) * 100) : 0;
                 const latest = f.updates.length ? f.updates[f.updates.length - 1] : null;
-                const beads = (data.beads && data.beads[f.id]) || [];
+                const rawBeads = data.beads ? data.beads[f.id] : null;
+                const beads = Array.isArray(rawBeads) ? rawBeads : [];
                 const depsHtml = state.showDeps && f.depends_on.length
                   ? '<div class="card-meta"><span>Deps:</span> ' + f.depends_on.map((d) => '<span class="ref-chip">' + esc(d) + "</span>").join(" ") + "</div>"
                   : "";
@@ -1776,17 +1815,19 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     function renderDrawer(opts) {
       const backdrop = document.getElementById("drawer-backdrop");
       const drawer = document.getElementById("drawer");
-      if (!state.selectedFeatureId || !state.data) {
+      const clearDrawer = () => {
         backdrop.classList.remove("open");
         backdrop.setAttribute("aria-hidden", "true");
         drawer.innerHTML = "";
+        state.drawerFeatureId = null;
+      };
+      if (!state.selectedFeatureId || !state.data) {
+        clearDrawer();
         return;
       }
       const feature = state.data.features.find((f) => f.id === state.selectedFeatureId);
       if (!feature) {
-        backdrop.classList.remove("open");
-        backdrop.setAttribute("aria-hidden", "true");
-        drawer.innerHTML = "";
+        clearDrawer();
         return;
       }
 
@@ -1795,8 +1836,8 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       let restoreInputFocus = false;
       let selStart = null;
       let selEnd = null;
-      if (prevInput) {
-        state.noteDrafts[feature.id] = prevInput.value;
+      if (prevInput && state.drawerFeatureId) {
+        state.noteDrafts[state.drawerFeatureId] = prevInput.value;
         if (document.activeElement === prevInput) {
           restoreInputFocus = true;
           selStart = prevInput.selectionStart;
@@ -1808,8 +1849,10 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
 
-      const beads = (state.data.beads && state.data.beads[feature.id]) || [];
+      const rawBeads = state.data.beads ? state.data.beads[feature.id] : null;
+      const beads = Array.isArray(rawBeads) ? rawBeads : [];
       const statuses = ["planned", "in-progress", "shipped", "paused", "cut"];
+      state.drawerFeatureId = feature.id;
       const currentDraft = state.noteDrafts[feature.id] || "";
 
       const statusBlock = isStatic
@@ -1903,7 +1946,6 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         btn.addEventListener("click", () => {
           const targetId = btn.getAttribute("data-jump");
           if (targetId) {
-            state.feedback = null;
             openDrawer(targetId, { focusDrawer: true });
           }
         });
@@ -1915,11 +1957,15 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
           e.preventDefault();
           const note = noteInput.value.trim();
           if (!note) return;
+          const submittedDraft = noteInput.value;
           const submitBtn = document.getElementById("drawer-note-submit");
           if (submitBtn) submitBtn.disabled = true;
           await sendPulse(feature.id, { note }, () => {
+            if (state.noteDrafts[feature.id] !== submittedDraft) return;
             delete state.noteDrafts[feature.id];
-            noteInput.value = "";
+            if (noteInput.isConnected && state.drawerFeatureId === feature.id && noteInput.value === submittedDraft) {
+              noteInput.value = "";
+            }
           });
           const newSubmitBtn = document.getElementById("drawer-note-submit");
           if (newSubmitBtn) newSubmitBtn.disabled = false;
@@ -2032,12 +2078,13 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
         const badge = document.getElementById("live-badge");
         badge.className = "pill pill-live";
         badge.innerHTML = '<span class="dot"></span> Live';
+        fetchRoadmap().catch(console.error);
       });
     }
 
     fetchRoadmap().catch((err) => {
-      document.getElementById("project-name").textContent = "Failed to load roadmap";
-      document.getElementById("project-summary").textContent = err.message;
+      state.loadError = (err && err.message) || "Failed to load roadmap";
+      renderLoadStatus();
     });
   </script>
 </body>
