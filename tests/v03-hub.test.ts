@@ -1,9 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
-import { joinOrStartHub, startHubServer, type HubServerHandle } from "../src/hub";
+import {
+  joinOrStartHub,
+  startHubServer,
+  type HubServerHandle,
+  type ProjectsRegistryFile,
+} from "../src/hub";
 import { RoadmapService } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";
 import { authFetch } from "./helpers/auth";
@@ -77,7 +90,9 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const api = authFetch(hub.accessToken);
 
     // Token, access-token, and registry files created with restrictive permissions (state dir 0700)
-    const hubLockPath = join(stateDir, "hub.json");
+    // Dynamic port 0 persists under the actual bound port, never `hub.0.json`
+    const hubLockPath = join(stateDir, `hub.${hub.port}.json`);
+    expect(existsSync(join(stateDir, "hub.0.json"))).toBe(false);
     expect(existsSync(hubLockPath)).toBe(true);
     expect(statSync(hubLockPath).mode & 0o777).toBe(0o600);
     expect(statSync(join(stateDir, "access-token")).mode & 0o777).toBe(0o600);
@@ -114,7 +129,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(joinA.url).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo`);
     expect(joinA.openUrl).toBe(`http://127.0.0.1:${hub.port}/p/alpha-repo?t=${hub.accessToken}`);
     expect((await fetch(`${hub.url}/p/alpha-repo/api/roadmap`)).status).toBe(401);
-    expect(statSync(join(stateDir, "projects.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(stateDir, `projects.${hub.port}.json`)).mode & 0o777).toBe(0o600);
 
     const joinB = await joinOrStartHub(repoB, { port: hub.port, stateDir });
     expect(joinB.mode).toBe("joined");
@@ -157,8 +172,122 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
       "alpha-repo",
       "beta-repo",
     ]);
-    const savedRegistry = JSON.parse(readFileSync(join(stateDir, "projects.json"), "utf8"));
+    const savedRegistry = JSON.parse(
+      readFileSync(join(stateDir, `projects.${hub.port}.json`), "utf8")
+    );
     expect(savedRegistry.projects).toHaveLength(2);
+  });
+
+  test("two hubs on different ports sharing a state directory stay joinable with durable membership", async () => {
+    const repoA = makeRepo("hub-a", "Hub A Project", "feat-hub-a");
+    const repoB = makeRepo("hub-b", "Hub B Project", "feat-hub-b");
+    const repoC = makeRepo("hub-c", "Hub C Project", "feat-hub-c");
+
+    // Dynamic port 0: both hubs persist under their actual bound ports, sharing one state directory.
+    const hubA = startHubServer({ port: 0, stateDir });
+    const hubB = startHubServer({ port: 0, stateDir });
+    let hubBRestarted: HubServerHandle | null = null;
+    expect(hubA.port).not.toBe(hubB.port);
+    try {
+      // Discovery is port-scoped: each hub wrote its own lock, and none wrote a `hub.0.json` placeholder.
+      expect(existsSync(join(stateDir, `hub.${hubA.port}.json`))).toBe(true);
+      expect(existsSync(join(stateDir, `hub.${hubB.port}.json`))).toBe(true);
+      expect(existsSync(join(stateDir, "hub.0.json"))).toBe(false);
+
+      // Both ports remain joinable while the other hub is running. Before port-scoping, the second
+      // start overwrote the shared hub.json and the first hub's join failed its token check.
+      const joinA = await joinOrStartHub(repoA, { port: hubA.port, stateDir });
+      expect(joinA.mode).toBe("joined");
+      const joinB = await joinOrStartHub(repoB, { port: hubB.port, stateDir });
+      expect(joinB.mode).toBe("joined");
+
+      // A subsequent save on the first hub must not erase the second hub's registration...
+      const joinC = await joinOrStartHub(repoC, { port: hubA.port, stateDir });
+      expect(joinC.mode).toBe("joined");
+      const registryA = JSON.parse(
+        readFileSync(join(stateDir, `projects.${hubA.port}.json`), "utf8")
+      );
+      expect(registryA.projects.map((p: { slug: string }) => p.slug).sort()).toEqual([
+        "hub-a",
+        "hub-c",
+      ]);
+
+      // A same-port collision fails to start without touching the first hub's state.
+      const lockBefore = readFileSync(join(stateDir, `hub.${hubA.port}.json`), "utf8");
+      const registryBefore = readFileSync(
+        join(stateDir, `projects.${hubA.port}.json`),
+        "utf8"
+      );
+      expect(() => startHubServer({ port: hubA.port, stateDir })).toThrow();
+      expect(readFileSync(join(stateDir, `hub.${hubA.port}.json`), "utf8")).toBe(lockBefore);
+      expect(readFileSync(join(stateDir, `projects.${hubA.port}.json`), "utf8")).toBe(
+        registryBefore
+      );
+
+      // ...and the second hub's membership is durable across a restart on the same port.
+      const registryB = JSON.parse(
+        readFileSync(join(stateDir, `projects.${hubB.port}.json`), "utf8")
+      );
+      expect(registryB.projects.map((p: { slug: string }) => p.slug)).toEqual(["hub-b"]);
+      hubB.stop();
+      hubBRestarted = startHubServer({ port: hubB.port, stateDir });
+      const list = await (
+        await authFetch(hubBRestarted.accessToken)(`${hubBRestarted.url}/api/hub/projects`)
+      ).json();
+      expect(list.projects.map((p: { slug: string }) => p.slug)).toEqual(["hub-b"]);
+      // The restarted hub re-adopted its port's lock file and is joinable again.
+      const rejoinB = await joinOrStartHub(repoB, { port: hubBRestarted.port, stateDir });
+      expect(rejoinB.mode).toBe("joined");
+    } finally {
+      hubA.stop();
+      hubB.stop();
+      hubBRestarted?.stop();
+    }
+  });
+
+  test("startup failure after bind closes the bound server and its rehydrated slots", () => {
+    const repoA = makeRepo("startup-a", "Startup A", "feat-startup-a");
+
+    // Capture a deterministically free port, then release it for the failing startup.
+    const probe = startHubServer({ port: 0, stateDir });
+    const port = probe.port;
+    probe.stop();
+
+    // A persisted registry entry forces slot creation during startup, and an unwritable discovery
+    // lock (a directory where the lock file belongs) makes the post-bind lock write throw.
+    const registry: ProjectsRegistryFile = {
+      version: 1,
+      projects: [
+        {
+          slug: "startup-a",
+          rootDir: repoA,
+          name: "Startup A",
+          registeredAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    };
+    writeFileSync(
+      join(stateDir, `projects.${port}.json`),
+      `${JSON.stringify(registry, null, 2)}\n`
+    );
+    const lockPath = join(stateDir, `hub.${port}.json`);
+    mkdirSync(lockPath);
+
+    expect(() => startHubServer({ port, stateDir })).toThrow();
+
+    // The failed startup released the port: after removing the fake lock, the same port binds again,
+    // and the rehydrated registry still carries the seeded membership.
+    rmSync(lockPath, { recursive: true, force: true });
+    const rebound = startHubServer({ port, stateDir });
+    try {
+      const list = JSON.parse(
+        readFileSync(join(stateDir, `projects.${port}.json`), "utf8")
+      ) as ProjectsRegistryFile;
+      expect(list.projects.map((p) => p.slug)).toEqual(["startup-a"]);
+    } finally {
+      rebound.stop();
+    }
   });
 
   testUi("renders portfolio overview and switches between hub projects in browser", async () => {

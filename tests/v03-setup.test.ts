@@ -7,6 +7,7 @@ import {
   AGENTS_BLOCK_END,
   AGENTS_BLOCK_START,
   DEFAULT_SKILL_REL_PATH,
+  getManagedAgentsBlock,
   mergeAgentsMarkdown,
   runRepoSetup,
 } from "../src/setup";
@@ -107,6 +108,94 @@ describe("v0.3 Agent Onboarding & Repo Setup (pp setup)", () => {
     expect(upgraded.content).toContain("## Footer Rules");
     expect(upgraded.content).toContain(AGENTS_BLOCK_START);
     expect(upgraded.content.match(/Project Roadmap/g)?.length).toBe(1);
+  });
+
+  test("migrates unmarked legacy snippet byte-exactly, keeping top-level sections, same-section prose, and double-run stability", () => {
+    const managedBlock = getManagedAgentsBlock();
+
+    // Regression: a legacy paste followed by a top-level (`# `) section must not swallow that
+    // section; migration replaces only the recognized generated text.
+    const withDeployment = [
+      "# Repo Guide",
+      "",
+      "Intro prose.",
+      "",
+      getAgentsSnippet(),
+      "",
+      "# Deployment",
+      "",
+      "- Ship via `pp` releases.",
+      "",
+    ].join("\n");
+    const migrated = mergeAgentsMarkdown(withDeployment);
+    expect(migrated.action).toBe("update");
+    expect(migrated.content).toBe(
+      `# Repo Guide\n\nIntro prose.\n\n${managedBlock}\n\n# Deployment\n\n- Ship via \`pp\` releases.\n`
+    );
+
+    // Custom prose written inside the same section after the paste survives the upgrade
+    const withProse = [
+      "# Repo Guide",
+      "",
+      getAgentsSnippet(),
+      "",
+      "> Team note: also check RELEASES.md before merging.",
+      "",
+    ].join("\n");
+    const proseMigrated = mergeAgentsMarkdown(withProse);
+    expect(proseMigrated.action).toBe("update");
+    expect(proseMigrated.content).toBe(
+      `# Repo Guide\n\n${managedBlock}\n\n> Team note: also check RELEASES.md before merging.\n`
+    );
+
+    // Re-running the merge on already-migrated output is byte-stable
+    const reMigrated = mergeAgentsMarkdown(migrated.content);
+    expect(reMigrated.action).toBe("unchanged");
+    expect(reMigrated.content).toBe(migrated.content);
+
+    // Heading whose body no longer matches the generated snippet is not migrated; the fallback
+    // appends the managed block and preserves every user byte
+    const edited = [
+      "# Repo Guide",
+      "",
+      "## Project Roadmap (`project-pulse` / `pp`)",
+      "",
+      "Hand-written workflow notes that do not match the generated snippet.",
+      "",
+    ].join("\n");
+    const fallback = mergeAgentsMarkdown(edited);
+    expect(fallback.action).toBe("update");
+    expect(fallback.content).toBe(`${edited.trimEnd()}\n\n${managedBlock}\n`);
+  });
+
+  test("upgrades CRLF originals byte-exactly, restyling the managed block to CRLF", () => {
+    const crlfBlock = getManagedAgentsBlock().replace(/\n/g, "\r\n");
+    const original = [
+      "# Repo Guide",
+      "",
+      getAgentsSnippet(),
+      "",
+      "# Deployment",
+      "",
+      "- Keep the release checklist current.",
+      "",
+      "",
+    ].join("\r\n");
+    const migrated = mergeAgentsMarkdown(original);
+    expect(migrated.action).toBe("update");
+    expect(migrated.content).toBe(
+      `# Repo Guide\r\n\r\n${crlfBlock}\r\n\r\n# Deployment\r\n\r\n- Keep the release checklist current.\r\n\r\n`
+    );
+
+    // Re-running on migrated output is byte-stable via the managed path
+    const rerun = mergeAgentsMarkdown(migrated.content);
+    expect(rerun.action).toBe("unchanged");
+    expect(rerun.content).toBe(migrated.content);
+
+    // Append fallback preserves the document's trailing whitespace instead of trimming it
+    const appended = mergeAgentsMarkdown("# Notes\n\n\n");
+    expect(appended.action).toBe("update");
+    expect(appended.content).toBe(`# Notes\n\n\n${getManagedAgentsBlock()}\n`);
   });
 
   test("merges into existing MCP config preserving sibling servers and supports --dry-run", async () => {

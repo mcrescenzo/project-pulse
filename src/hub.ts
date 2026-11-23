@@ -123,6 +123,23 @@ export function resolveHubStateDir(stateDir?: string): string {
   );
 }
 
+export const DEFAULT_HUB_PORT = 4310;
+
+/**
+ * Discovery lock path for a hub bound to `port`. Hubs on different ports sharing one state directory
+ * must not overwrite each other's lock, so non-default ports get their own `hub.<port>.json`. The
+ * default port keeps the legacy `hub.json` name so existing discovery state keeps working. Dynamic
+ * port 0 callers pass the actual bound port, never 0.
+ */
+function hubLockPathFor(stateDir: string, port: number): string {
+  return join(stateDir, port === DEFAULT_HUB_PORT ? "hub.json" : `hub.${port}.json`);
+}
+
+/** Registry path counterpart to {@link hubLockPathFor}, with the same port-scoping rules. */
+function projectsRegistryPathFor(stateDir: string, port: number): string {
+  return join(stateDir, port === DEFAULT_HUB_PORT ? "projects.json" : `projects.${port}.json`);
+}
+
 function canonicalRoot(rootDir: string): string {
   const abs = resolve(rootDir);
   try {
@@ -161,13 +178,16 @@ function readJsonFile<T>(filePath: string): T | null {
  */
 export function startHubServer(options: HubServerOptions = {}): HubServerHandle {
   const hostname = options.hostname ?? "127.0.0.1";
-  const requestedPort = options.port ?? 4310;
+  const requestedPort = options.port ?? DEFAULT_HUB_PORT;
   const stateDir = resolveHubStateDir(options.stateDir);
   const token = options.token ?? randomBytes(32).toString("hex");
   ensurePrivateDir(stateDir);
   const accessToken = options.accessToken ?? loadOrCreateAccessToken(stateDir);
-  const hubJsonPath = join(stateDir, "hub.json");
-  const projectsJsonPath = join(stateDir, "projects.json");
+
+  // Resolved from the actual bound port once the server is listening: hubs on different ports
+  // sharing one state directory keep separate discovery and registry files, and a hub started with
+  // dynamic port 0 persists under its real port instead of `hub.0.json`.
+  let boundPort = requestedPort;
 
   const recordsBySlug = new Map<string, RegisteredProjectRecord>();
   const slotsBySlug = new Map<string, ProjectSlot>();
@@ -177,7 +197,10 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
       version: 1,
       projects: [...recordsBySlug.values()],
     };
-    writePrivateFile(projectsJsonPath, `${JSON.stringify(file, null, 2)}\n`);
+    writePrivateFile(
+      projectsRegistryPathFor(stateDir, boundPort),
+      `${JSON.stringify(file, null, 2)}\n`
+    );
   };
 
   const pruneStaleProjects = (): boolean => {
@@ -310,34 +333,7 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     return items.sort((a, b) => a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug));
   };
 
-  // Rehydrate still-valid projects from projects.json
-  const existingRegistry = readJsonFile<ProjectsRegistryFile>(projectsJsonPath);
-  if (existingRegistry && Array.isArray(existingRegistry.projects)) {
-    for (const entry of existingRegistry.projects) {
-      if (!entry?.rootDir || !isRepoInitialized(entry.rootDir)) continue;
-      const canonical = canonicalRoot(entry.rootDir);
-      if ([...recordsBySlug.values()].some((r) => canonicalRoot(r.rootDir) === canonical)) continue;
-      const slot = createProjectSlot(canonical, { beadsClient: options.beadsClient });
-      let slug = entry.slug || slugifyRepoName(canonical, entry.name);
-      let suffix = 2;
-      while (recordsBySlug.has(slug)) {
-        slug = `${slugifyRepoName(canonical, entry.name)}-${suffix}`;
-        suffix++;
-      }
-      recordsBySlug.set(slug, {
-        slug,
-        rootDir: canonical,
-        name: entry.name || basename(canonical),
-        registeredAt: entry.registeredAt || new Date().toISOString(),
-        lastSeenAt: entry.lastSeenAt || new Date().toISOString(),
-      });
-      slotsBySlug.set(slug, slot);
-    }
-    saveRegistry();
-  }
-
   const portfolioHtml = buildPortfolioHtml();
-  let boundPort = requestedPort;
   let stopped = false;
 
   const isTokenAuthorized = (req: Request): boolean | null => {
@@ -526,15 +522,58 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     },
   });
 
+  // The server is listening, so dynamic port 0 has resolved: scope state files to the actual port.
+  // Rehydrating only after a successful bind also means a failed start (port already in use) never
+  // touches another hub's persisted state.
   boundPort = server.port ?? requestedPort;
-  const hubLock: HubLockFile = {
-    pid: process.pid,
-    port: boundPort,
-    token,
-    accessToken,
-    startedAt: new Date().toISOString(),
-  };
-  writePrivateFile(hubJsonPath, `${JSON.stringify(hubLock, null, 2)}\n`);
+
+  try {
+    // Rehydrate still-valid projects from this port's persisted registry.
+    const existingRegistry = readJsonFile<ProjectsRegistryFile>(
+      projectsRegistryPathFor(stateDir, boundPort)
+    );
+    if (existingRegistry && Array.isArray(existingRegistry.projects)) {
+      for (const entry of existingRegistry.projects) {
+        if (!entry?.rootDir || !isRepoInitialized(entry.rootDir)) continue;
+        const canonical = canonicalRoot(entry.rootDir);
+        if ([...recordsBySlug.values()].some((r) => canonicalRoot(r.rootDir) === canonical)) continue;
+        const slot = createProjectSlot(canonical, { beadsClient: options.beadsClient });
+        let slug = entry.slug || slugifyRepoName(canonical, entry.name);
+        let suffix = 2;
+        while (recordsBySlug.has(slug)) {
+          slug = `${slugifyRepoName(canonical, entry.name)}-${suffix}`;
+          suffix++;
+        }
+        recordsBySlug.set(slug, {
+          slug,
+          rootDir: canonical,
+          name: entry.name || basename(canonical),
+          registeredAt: entry.registeredAt || new Date().toISOString(),
+          lastSeenAt: entry.lastSeenAt || new Date().toISOString(),
+        });
+        slotsBySlug.set(slug, slot);
+      }
+      saveRegistry();
+    }
+
+    const hubLock: HubLockFile = {
+      pid: process.pid,
+      port: boundPort,
+      token,
+      accessToken,
+      startedAt: new Date().toISOString(),
+    };
+    writePrivateFile(hubLockPathFor(stateDir, boundPort), `${JSON.stringify(hubLock, null, 2)}\n`);
+  } catch (error) {
+    // Startup failed after bind: the caller never receives a handle, so release the bound server
+    // and every slot acquired during rehydration here instead of leaking them.
+    for (const slot of slotsBySlug.values()) {
+      slot.close();
+    }
+    slotsBySlug.clear();
+    server.stop(true);
+    throw error;
+  }
 
   const hubUrl = `http://${hostname}:${boundPort}`;
 
@@ -546,10 +585,10 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     }
     slotsBySlug.clear();
     server.stop(true);
-    const currentLock = readJsonFile<HubLockFile>(hubJsonPath);
+    const currentLock = readJsonFile<HubLockFile>(hubLockPathFor(stateDir, boundPort));
     if (currentLock && currentLock.pid === process.pid && currentLock.token === token) {
       try {
-        rmSync(hubJsonPath, { force: true });
+        rmSync(hubLockPathFor(stateDir, boundPort), { force: true });
       } catch {
         // Ignore cleanup failure
       }
@@ -582,7 +621,7 @@ export async function joinOrStartHub(
   service.requireInitialized();
 
   const hostname = options.hostname ?? "127.0.0.1";
-  const port = options.port ?? 4310;
+  const port = options.port ?? DEFAULT_HUB_PORT;
   const stateDir = resolveHubStateDir(options.stateDir);
   const hubBase = `http://${hostname}:${port}`;
 
@@ -609,14 +648,12 @@ export async function joinOrStartHub(
       );
     }
 
-    const lockFile = readJsonFile<HubLockFile>(join(stateDir, "hub.json"));
-    // Only hand our hub token to the process that actually wrote hub.json (guards against port squatters).
+    const lockPath = hubLockPathFor(stateDir, port);
+    const lockFile = readJsonFile<HubLockFile>(lockPath);
+    // Only hand our hub token to the process that actually wrote the port's hub lock (guards against port squatters).
     if (!lockFile?.token || lockFile.pid !== payload.pid || lockFile.port !== port) {
       throw new Error(
-        `Detected a running Project Pulse hub on ${hubBase}, but found no matching hub token in ${join(
-          stateDir,
-          "hub.json"
-        )}. Re-run with '--standalone' or '--port <n>'.`
+        `Detected a running Project Pulse hub on ${hubBase}, but found no matching hub token in ${lockPath}. Re-run with '--standalone' or '--port <n>'.`
       );
     }
 
