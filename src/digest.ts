@@ -158,7 +158,15 @@ function loadBaselineFeaturesFromCommit(
 ): Map<string, Feature> {
   const out = new Map<string, Feature>();
   const featureRelDir = `${PULSE_DIR_NAME}/${FEATURES_DIR_NAME}`;
-  const tree = runGit(["ls-tree", "-r", "--name-only", commit, "--", featureRelDir], rootDir);
+  // `git show <commit>:<path>` below resolves <path> from the repository root, so ls-tree must
+  // report repository-root-relative paths (--full-name). Without it, a rootDir nested inside the
+  // repository (e.g. repo/pkg/a) yields cwd-relative paths: the show resolves against the wrong
+  // tree and the baseline silently comes back empty, or picks up another project's
+  // identically-named feature files.
+  const tree = runGit(
+    ["ls-tree", "-r", "--name-only", "--full-name", commit, "--", featureRelDir],
+    rootDir
+  );
   if (!tree.ok || !tree.stdout.trim()) return out;
 
   for (const relPath of tree.stdout.split("\n").map((s) => s.trim()).filter(Boolean)) {
@@ -525,13 +533,34 @@ export function buildChangelog(
   }
 
   const orderedMilestones = sortMilestones(loaded.milestones);
-  if (orderedMilestones.length === 0) {
-    throw new Error("No milestones found in .project-pulse/milestones/");
-  }
+
+  // Features may sit in the configured default bucket without an explicit milestone file
+  // (`pp summary` renders that bucket as an implicit "Backlog" section). `--all` covers the whole
+  // roadmap, so it must include the bucket — but never duplicate it when a real milestone already
+  // uses the same id.
+  const defaultBucketId = loaded.config.defaults.milestone;
+  const implicitDefaultBucket: Milestone | null = orderedMilestones.some(
+    (m) => m.id === defaultBucketId
+  )
+    ? null
+    : {
+        id: defaultBucketId,
+        title: "Backlog",
+        order: Number.MAX_SAFE_INTEGER,
+        status: "planned",
+        description: "",
+      };
 
   let selected: Milestone[];
   if (options.all) {
-    selected = orderedMilestones;
+    selected = [...orderedMilestones];
+    if (
+      implicitDefaultBucket &&
+      (selected.length === 0 ||
+        loaded.features.some((f) => f.milestone === implicitDefaultBucket.id))
+    ) {
+      selected.push(implicitDefaultBucket);
+    }
   } else if (options.milestone) {
     const found = orderedMilestones.find((m) => m.id === options.milestone);
     if (!found) {
@@ -539,6 +568,9 @@ export function buildChangelog(
     }
     selected = [found];
   } else {
+    if (orderedMilestones.length === 0) {
+      throw new Error("No milestones found in .project-pulse/milestones/");
+    }
     const shipped = orderedMilestones.filter((m) => m.status === "shipped");
     const active = orderedMilestones.find((m) => m.status === "active");
     const defaultMilestone =
