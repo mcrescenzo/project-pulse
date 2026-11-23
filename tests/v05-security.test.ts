@@ -3,6 +3,7 @@ import {
   chmodSync,
   lstatSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { CliBeadsClient } from "../src/beads";
 import { buildDigest } from "../src/digest";
 import { writeFileAtomic } from "../src/frontmatter";
@@ -33,6 +34,15 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
+
+// Same helper as tests/v03-digest.test.ts: fail loudly instead of cascading into
+// confusing downstream git failures.
+function git(args: string[], cwd: string): void {
+  const res = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  if (res.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(res.stderr)}`);
+  }
+}
 
 describe("v0.5 public release security hardening", () => {
   test("writeFileAtomic preserves symlinks and existing permission bits", () => {
@@ -204,10 +214,80 @@ describe("v0.5 public release security hardening", () => {
   test("git refs and Beads ids that look like flags are never parsed as options", async () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "Flag Safety" });
-    Bun.spawnSync(["git", "init", "-q"], { cwd: tempDir });
-    expect(() => buildDigest(tempDir, { since: "--output=/tmp/pp-should-not-exist" })).toThrow(
-      /Could not resolve git ref/
+    git(["init", "-q"], tempDir);
+    // Repo-local identity only (v03 pattern); never global config — commit must not rely on
+    // the runner's HOME.
+    git(["config", "user.name", "Tester"], tempDir);
+    git(["config", "user.email", "tester@example.com"], tempDir);
+    git(["add", "."], tempDir);
+    git(["commit", "-m", "init"], tempDir);
+
+    // Real git, named ref: HEAD resolves and anchors the digest baseline.
+    const named = buildDigest(tempDir, { since: "HEAD" });
+    expect(named.gitBaseline.available).toBe(true);
+    expect(named.gitBaseline.commit).toBeTruthy();
+    expect(named.gitBaseline.commitDate).toBeTruthy();
+
+    // Real git, absent ref: git rejects it and digest maps it to the ref-resolution error.
+    expect(() => buildDigest(tempDir, { since: "pp-definitely-not-a-ref" })).toThrow(
+      /Could not resolve git ref 'pp-definitely-not-a-ref'/
     );
+
+    // The mapped error alone cannot distinguish "the flag-looking value was passed safely
+    // as a revision operand" from "git failed for an unrelated reason", so record the exact
+    // argv with a fixture-local shim: it logs every git invocation, then execs real git so
+    // the failure itself stays genuine. `--pp-fixture-ref` is a harmless unrecognized
+    // synthetic operand — deliberately never a write-capable pseudo-option like --output=.
+    const flagRef = "--pp-fixture-ref";
+    const realGit = Bun.which("git");
+    expect(realGit).toBeTruthy();
+    const gitArgvLog = join(tempDir, "git-argv.log");
+    const shimDir = join(tempDir, "git-shim-bin");
+    mkdirSync(shimDir);
+    const gitShim = join(shimDir, "git");
+    writeFileSync(
+      gitShim,
+      `#!/usr/bin/env bash\nIFS=$'\\t'\nprintf '%s\\n' "$*" >> "${gitArgvLog}"\nexec "${realGit}" "$@"\n`
+    );
+    chmodSync(gitShim, 0o755);
+
+    // The probe runs in a child bun process whose env — never the test runner's PATH —
+    // carries the shim dir, so git resolves to the recorder there and to real git everywhere
+    // else. The child reports the mapped error message (or "resolved") on stdout.
+    const digestModulePath = join(import.meta.dir, "../src/digest.ts").replaceAll("\\", "/");
+    const probe = join(tempDir, "digest-probe.ts");
+    writeFileSync(
+      probe,
+      `import { buildDigest } from "${digestModulePath}";\n` +
+        `try {\n` +
+        `  buildDigest(${JSON.stringify(tempDir)}, { since: ${JSON.stringify(flagRef)} });\n` +
+        `  process.stdout.write("resolved");\n` +
+        `} catch (error) {\n` +
+        `  process.stdout.write((error as Error).message);\n` +
+        `}\n`
+    );
+    const probeRes = Bun.spawnSync([process.execPath, "run", probe], {
+      cwd: tempDir,
+      env: { ...process.env, PATH: `${shimDir}${delimiter}${process.env.PATH ?? ""}` },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(probeRes.exitCode).toBe(0);
+    expect(new TextDecoder().decode(probeRes.stdout).trim()).toBe(
+      "Could not resolve git ref '--pp-fixture-ref'"
+    );
+
+    // Regression: the flag-looking value may reach git only as a revision operand after the
+    // option terminator (`--end-of-options`), never as an option in its own right, and no
+    // other git command may see it.
+    const gitInvocations = readFileSync(gitArgvLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line: string) => line.split("\t"));
+    expect(gitInvocations).toEqual([
+      ["rev-parse", "--is-inside-work-tree"],
+      ["rev-parse", "--verify", "--end-of-options", `${flagRef}^{commit}`],
+    ]);
 
     // Fake bd that records its argv; ids must follow a `--` separator
     const argvLog = join(tempDir, "argv.log");
