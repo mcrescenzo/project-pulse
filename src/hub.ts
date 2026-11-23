@@ -107,6 +107,8 @@ export type JoinOrStartHubResult =
       port: number;
       url: string;
       openUrl: string;
+      /** Portfolio overview URL carrying `?t=<accessToken>` for first-visit cookie exchange. */
+      overviewUrl: string;
       handle: HubServerHandle;
     }
   | {
@@ -115,6 +117,8 @@ export type JoinOrStartHubResult =
       port: number;
       url: string;
       openUrl: string;
+      /** Portfolio overview URL carrying `?t=<accessToken>` for first-visit cookie exchange. */
+      overviewUrl: string;
     };
 
 export function resolveHubStateDir(stateDir?: string): string {
@@ -687,6 +691,9 @@ export async function joinOrStartHub(
       openUrl: lockFile.accessToken
         ? buildOpenUrl(hubBase, projectPath, lockFile.accessToken)
         : `${hubBase}${projectPath}`,
+      overviewUrl: lockFile.accessToken
+        ? buildOpenUrl(hubBase, "/", lockFile.accessToken)
+        : `${hubBase}/`,
     };
   }
 
@@ -712,6 +719,7 @@ export async function joinOrStartHub(
     port: handle.port,
     url: `${handle.url}${projectPath}`,
     openUrl: buildOpenUrl(handle.url, projectPath, handle.accessToken),
+    overviewUrl: handle.openUrl,
     handle,
   };
 }

@@ -154,7 +154,10 @@ function parseArgv(argv: string[]): ParsedArgs {
         const key = token.slice(2);
         if (VALUE_FLAGS.has(key)) {
           const next = argv[i + 1];
-          if (next === undefined) {
+          // A following option token means the value is missing, not that the flag swallows it
+          // ('--milestone --json' must not consume the --json switch). Literal option-like values
+          // pass through '=' syntax: --title=--json. Short tokens like --order -5 stay values.
+          if (next === undefined || next.startsWith("--") || next === "-h" || next === "-v") {
             throw new Error(`Missing value for flag --${key}`);
           }
           i++;
@@ -219,6 +222,10 @@ function getFlagAll(parsed: ParsedArgs, key: string): string[] {
 
 function parseOptionalNumber(raw: string | undefined, flagName: string): number | undefined {
   if (raw === undefined) return undefined;
+  if (!raw.trim()) {
+    // Number('') and Number('  ') silently coerce to 0; a blank numeric value is a mistake.
+    throw new Error(`Flag --${flagName} must be a finite number (got '${raw}')`);
+  }
   const num = Number(raw);
   if (!Number.isFinite(num)) {
     throw new Error(`Flag --${flagName} must be a finite number (got '${raw}')`);
@@ -271,9 +278,12 @@ Usage:
 
 Options:
   --root <dir>   Target repository root (defaults to nearest parent with .project-pulse/)
-  --json         Output structured JSON
+  --json         Output structured JSON (not on 'pp view' or 'pp mcp': interactive servers)
   -h, --help     Show help
-  -v, --version  Show version`);
+  -v, --version  Show version
+
+Values that look like options are passed with '=' syntax (e.g. --title=--json); negative numbers
+like --order -5 stay valid as separate arguments.`);
 }
 
 export interface CliDependencies {
@@ -353,7 +363,19 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         }
         return 1;
       }
-      printHelp();
+      if (jsonMode) {
+        // Bare 'pp --json' in an uninitialized repository gets a predictable machine-readable
+        // outcome; the human default stays the help text.
+        console.log(
+          JSON.stringify({
+            ok: true,
+            initialized: false,
+            message: "No .project-pulse/ roadmap found here. Run 'pp init' to create one.",
+          })
+        );
+      } else {
+        printHelp();
+      }
       return 0;
     }
   }
@@ -694,6 +716,11 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (subcmd !== undefined) {
           throw new Error(`Unexpected argument '${subcmd}' for 'mcp'`);
         }
+        if (jsonMode) {
+          throw new Error(
+            "Flag '--json' cannot be used with 'pp mcp' (it serves MCP over stdio and has no --json output)"
+          );
+        }
         await runMcpServer(rootDir, beadsClient);
         return 0;
       }
@@ -727,6 +754,11 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (noBeads) {
           throw new Error("Flag '--no-beads' on 'pp view' is only supported with '--tui'");
         }
+        if (jsonMode) {
+          throw new Error(
+            "Flag '--json' cannot be used with 'pp view' (it starts an interactive dashboard server and prints human-readable output)"
+          );
+        }
         const port = parseOptionalNumber(getFlag(parsed, "port"), "port") ?? 4310;
         const noOpen = parsed.booleans.has("no-open");
 
@@ -740,16 +772,18 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         }
 
         const hubResult = await joinOrStartHub(rootDir, { port, beadsClient });
+        // Every advertised landing link carries the access token (?t=) so a fresh browser can open
+        // it; the bare overview URL alone is rejected until the token exchange sets the cookie.
         if (hubResult.mode === "joined") {
           console.log(
-            `Joined Project Pulse hub at ${hubResult.openUrl} (overview: http://127.0.0.1:${hubResult.port}/)`
+            `Joined Project Pulse hub at ${hubResult.openUrl} (overview: ${hubResult.overviewUrl})`
           );
           if (!noOpen) openBrowser(hubResult.openUrl);
           return 0;
         }
 
         console.log(
-          `Project Pulse hub listening at ${hubResult.handle.url} (project: ${hubResult.openUrl})`
+          `Project Pulse hub listening at ${hubResult.overviewUrl} (project: ${hubResult.openUrl})`
         );
         if (!noOpen) openBrowser(hubResult.openUrl);
         await waitForShutdown(() => hubResult.handle.stop());
