@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import { RoadmapService } from "../src/store";
 import { TuiController } from "../src/tui/app";
 import { buildMouseModeEscapes, encodeOsc52Copy, InputDecoder, type InputEvent, type TerminalSession } from "../src/tui/input";

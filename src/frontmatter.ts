@@ -1,6 +1,7 @@
 import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import type { Feature, Milestone, PulseConfig } from "./types";
 
 export interface ParsedMarkdownFile {
@@ -37,7 +38,7 @@ export function parseMarkdownFile(raw: string): ParsedMarkdownFile {
     body = afterClose.startsWith("\n") ? afterClose.slice(1) : "";
   }
 
-  const parsed = yamlContent.trim() ? Bun.YAML.parse(yamlContent) : {};
+  const parsed = yamlContent.trim() ? yamlParse(yamlContent) : {};
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("YAML frontmatter must be a mapping/object");
   }
@@ -77,7 +78,7 @@ function cleanYamlOutput(rawYaml: string): string {
  */
 function isLosslessYaml(candidate: string, expected: Record<string, unknown>): boolean {
   try {
-    return isDeepStrictEqual(Bun.YAML.parse(candidate), expected);
+    return isDeepStrictEqual(yamlParse(candidate), expected);
   } catch {
     return false;
   }
@@ -86,21 +87,21 @@ function isLosslessYaml(candidate: string, expected: Record<string, unknown>): b
 /**
  * Serializes a store object to YAML that is verified to reload identically.
  *
- * Native `Bun.YAML.stringify` is preferred so unambiguous records keep their
- * exact formatting, but its plain scalars are lossy on supported runtimes:
- * strings ending in `:` were written unquoted before Bun 1.3.5 (reloading as
- * mappings), and numeric-looking strings such as `0.5` are still written
- * unquoted on Bun 1.3.9 (reloading as numbers, which made `pp check` report
- * MISSING_MILESTONE_TITLE). Each candidate is therefore parsed back and
- * deep-compared against the input — after cleanYamlOutput, i.e. exactly the
- * text that would be written. On any mismatch the store falls back to
- * `JSON.stringify(…, null, 2)`, itself a valid YAML document with readable
- * quoted strings, verified the same way before being returned.
+ * The `yaml` package is the single serializer on both runtimes (the previous
+ * native `Bun.YAML.stringify` was Bun-only and its plain scalars were lossy:
+ * numeric-looking strings such as `0.5` were written unquoted on Bun 1.3.9
+ * and reloaded as numbers, which made `pp check` report
+ * MISSING_MILESTONE_TITLE). Serialization is not trusted blindly: each
+ * candidate is parsed back and deep-compared against the input — after
+ * cleanYamlOutput, i.e. exactly the text that would be written. On any
+ * mismatch the store falls back to `JSON.stringify(…, null, 2)`, itself a
+ * valid YAML document with readable quoted strings, verified the same way
+ * before being returned.
  */
 function yamlForStore(orderedObject: Record<string, unknown>): string {
   let native = "";
   try {
-    native = cleanYamlOutput(Bun.YAML.stringify(orderedObject, null, 2));
+    native = cleanYamlOutput(yamlStringify(orderedObject, { indent: 2 }));
   } catch {
     // Fall through to the JSON candidate below.
   }

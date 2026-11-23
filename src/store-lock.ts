@@ -1,6 +1,36 @@
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { Database } from "bun:sqlite";
+
+/**
+ * Narrow driver surface both runtimes implement: Bun's `bun:sqlite` `Database` and
+ * Node's `node:sqlite` `DatabaseSync`. Only `exec`/`close` are used, so the lock
+ * works identically on each runtime.
+ */
+interface LockDb {
+  exec(sql: string): unknown;
+  close(): unknown;
+}
+
+type LockDbConstructor = new (path: string) => LockDb;
+
+/**
+ * The SQLite driver is resolved lazily on first lock use (never for `--help`/`--version`)
+ * and never imported statically: the built bundle stays runtime-agnostic and each runtime
+ * loads its own built-in driver via `createRequire`.
+ */
+let lockDbConstructor: LockDbConstructor | null = null;
+
+function loadLockDbConstructor(): LockDbConstructor {
+  if (lockDbConstructor === null) {
+    const require = createRequire(import.meta.url);
+    const ctor: LockDbConstructor = process.versions.bun
+      ? require("bun:sqlite").Database
+      : require("node:sqlite").DatabaseSync;
+    lockDbConstructor = ctor;
+  }
+  return lockDbConstructor;
+}
 
 /**
  * Cross-process coordination for `.project-pulse/` mutations.
@@ -51,16 +81,20 @@ export class StoreConflictError extends Error {
 }
 
 /** Active lock database paths held by this process, mapped to their open connection. */
-const heldLocks = new Map<string, Database>();
+const heldLocks = new Map<string, LockDb>();
 
 function isBusyError(error: unknown): boolean {
   const code = (error as { code?: string } | null)?.code;
   if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+  // node:sqlite reports numeric SQLite result codes on `errCode` (Bun uses string `code`s).
+  const errCode = (error as { errCode?: number } | null)?.errCode;
+  if (errCode === 5 /* SQLITE_BUSY */ || errCode === 6 /* SQLITE_LOCKED */) return true;
   return /database is locked/i.test((error as Error)?.message ?? "");
 }
 
-function openLockDb(dbPath: string, busyTimeoutMs: number): Database {
+function openLockDb(dbPath: string, busyTimeoutMs: number): LockDb {
   mkdirSync(dirname(dbPath), { recursive: true });
+  const Database = loadLockDbConstructor();
   const db = new Database(dbPath);
   db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   return db;

@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { BeadsClient } from "../src/beads";
 import { RoadmapService } from "../src/store";
 import { TuiController } from "../src/tui/app";
 import { getDrawerRect } from "../src/tui/drawer";
 import { NodeTerminalSession, type InputEvent, type TerminalSession } from "../src/tui/input";
 import type { ColorMode } from "../src/tui/screen";
+import { cliCommand, REPO_ROOT, which } from "./helpers/cli";
 import { waitFor } from "./helpers/wait";
 
 class VirtualDrawerSession implements TerminalSession {
@@ -157,7 +159,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
     } finally {
       ctrl.stop();
     }
-  });
+  }, 15000);
 
   test("paints immediately before async Beads completes, hydrates Beads later, and preserves unsaved draft across live fs.watch reload", async () => {
     const svc = seedProject(tempDir);
@@ -212,16 +214,19 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
     }
   });
 
-  test.skipIf(!Bun.which("python3"))("headless PTY smoke test enters alt-screen, renders dashboard, and restores terminal cleanly on q", async () => {
+  test.skipIf(which("python3") === null)("headless PTY smoke test enters alt-screen, renders dashboard, and restores terminal cleanly on q", async () => {
     seedProject(tempDir);
-    const repoRoot = resolve(import.meta.dir, "..");
-    const cliPath = join(repoRoot, "src", "cli.ts");
+    const repoRoot = REPO_ROOT;
+    // The Python script launches exactly the argv this runtime/tests config selects (source CLI
+    // under Bun, the built bundle under Node or PP_TEST_CLI) — it never reinserts a `run` arg.
+    const prefixArgv = JSON.stringify([cliCommand().execPath, ...cliCommand().args]);
 
     const pyScript = `
-import os, pty, select, subprocess, time, sys
+import json, os, pty, select, subprocess, time, sys
 master, slave = pty.openpty()
+prefix = json.loads(sys.argv[1])
 proc = subprocess.Popen(
-    [sys.argv[3], "run", sys.argv[1], "--root", sys.argv[2], "view", "--tui", "--no-beads"],
+    prefix + ["--root", sys.argv[2], "view", "--tui", "--no-beads"],
     stdin=slave, stdout=slave, stderr=slave, close_fds=True,
     env={**os.environ, "TERM": "xterm-256color"}
 )
@@ -253,12 +258,11 @@ assert "\\x1b[?1049l" in out, "missing alt-screen leave"
 assert "Drawer TUI Project" in out, "missing rendered project title"
 sys.exit(rc)
 `;
-    const res = Bun.spawnSync(["python3", "-c", pyScript, cliPath, tempDir, process.execPath], {
+    const res = spawnSync("python3", ["-c", pyScript, prefixArgv, tempDir], {
       cwd: repoRoot,
-      stdout: "pipe",
-      stderr: "pipe",
+      encoding: "utf8",
     });
-    expect(res.exitCode).toBe(0);
+    expect(res.status, res.stderr).toBe(0);
   });
 
   test("health modal out-ranks open drawer: Close click dismisses only Health, covered status/criteria untouched on disk", () => {

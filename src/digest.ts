@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { parseMarkdownFile } from "./frontmatter";
 import { sortFeatures, sortMilestones } from "./renderer";
 import { FEATURES_DIR_NAME, PULSE_DIR_NAME, RoadmapService } from "./store";
@@ -139,14 +140,10 @@ export function parseSinceSpec(raw?: string, now: Date = new Date()): SinceSpec 
 
 function runGit(args: string[], cwd: string): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const proc = Bun.spawnSync(["git", ...args], {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const stdout = proc.stdout ? new TextDecoder().decode(proc.stdout).trimEnd() : "";
-    const stderr = proc.stderr ? new TextDecoder().decode(proc.stderr).trimEnd() : "";
-    return { ok: proc.exitCode === 0, stdout, stderr };
+    const proc = spawnSync("git", args, { cwd, encoding: "utf8" });
+    const stdout = (proc.stdout ?? "").trimEnd();
+    const stderr = (proc.stderr ?? "").trimEnd();
+    return { ok: proc.status === 0, stdout, stderr };
   } catch (error) {
     return { ok: false, stdout: "", stderr: (error as Error).message };
   }

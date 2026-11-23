@@ -18,8 +18,10 @@ import {
   type ProjectsRegistryFile,
 } from "../src/hub";
 import { RoadmapService } from "../src/store";
+import { spawnCli } from "./helpers/cli";
 import { BROWSER_TEST_TIMEOUT_MS, resolveChromiumExecutable } from "./helpers/chromium";
 import { authFetch } from "./helpers/auth";
+import { requestWithHeaders } from "./helpers/http";
 
 const CHROMIUM_PATH = resolveChromiumExecutable();
 const testUi = CHROMIUM_PATH ? test : test.skip;
@@ -40,7 +42,7 @@ afterEach(async () => {
     browser = null;
   }
   if (hub) {
-    hub.stop();
+    await hub.stop();
     hub = null;
   }
   rmSync(tempRoot, { recursive: true, force: true });
@@ -103,7 +105,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const nestedDuplicateDir = join(tempRoot, "nested", "alpha-repo");
     const repoA2 = makeRepo(join("nested", "alpha-repo"), "Second Alpha", "alpha2-feat");
 
-    hub = startHubServer({ port: 0, stateDir });
+    hub = await startHubServer({ port: 0, stateDir });
     const api = authFetch(hub.accessToken);
 
     // Token, access-token, and registry files created with restrictive permissions (state dir 0700)
@@ -121,7 +123,8 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     // Health probe stays public for hub discovery, but a foreign Host is rejected (DNS rebinding)
     expect((await fetch(`${hub.url}/api/hub/health`)).status).toBe(200);
     expect(
-      (await fetch(`${hub.url}/api/hub/health`, { headers: { Host: "attacker.example" } })).status
+      (await requestWithHeaders(`${hub.url}/api/hub/health`, { headers: { Host: "attacker.example" } }))
+        .status
     ).toBe(403);
 
     // Registration rejects missing or bad token
@@ -202,8 +205,8 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const repoC = makeRepo("hub-c", "Hub C Project", "feat-hub-c");
 
     // Dynamic port 0: both hubs persist under their actual bound ports, sharing one state directory.
-    const hubA = startHubServer({ port: 0, stateDir });
-    const hubB = startHubServer({ port: 0, stateDir });
+    const hubA = await startHubServer({ port: 0, stateDir });
+    const hubB = await startHubServer({ port: 0, stateDir });
     let hubBRestarted: HubServerHandle | null = null;
     expect(hubA.port).not.toBe(hubB.port);
     try {
@@ -236,7 +239,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
         join(stateDir, `projects.${hubA.port}.json`),
         "utf8"
       );
-      expect(() => startHubServer({ port: hubA.port, stateDir })).toThrow();
+      await expect(startHubServer({ port: hubA.port, stateDir })).rejects.toThrow();
       expect(readFileSync(join(stateDir, `hub.${hubA.port}.json`), "utf8")).toBe(lockBefore);
       expect(readFileSync(join(stateDir, `projects.${hubA.port}.json`), "utf8")).toBe(
         registryBefore
@@ -247,8 +250,8 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
         readFileSync(join(stateDir, `projects.${hubB.port}.json`), "utf8")
       );
       expect(registryB.projects.map((p: { slug: string }) => p.slug)).toEqual(["hub-b"]);
-      hubB.stop();
-      hubBRestarted = startHubServer({ port: hubB.port, stateDir });
+      await hubB.stop();
+      hubBRestarted = await startHubServer({ port: hubB.port, stateDir });
       const list = await (
         await authFetch(hubBRestarted.accessToken)(`${hubBRestarted.url}/api/hub/projects`)
       ).json();
@@ -257,19 +260,19 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
       const rejoinB = await joinOrStartHub(repoB, { port: hubBRestarted.port, stateDir });
       expect(rejoinB.mode).toBe("joined");
     } finally {
-      hubA.stop();
-      hubB.stop();
-      hubBRestarted?.stop();
+      await hubA.stop();
+      await hubB.stop();
+      await hubBRestarted?.stop();
     }
   });
 
-  test("startup failure after bind closes the bound server and its rehydrated slots", () => {
+  test("startup failure after bind closes the bound server and its rehydrated slots", async () => {
     const repoA = makeRepo("startup-a", "Startup A", "feat-startup-a");
 
     // Capture a deterministically free port, then release it for the failing startup.
-    const probe = startHubServer({ port: 0, stateDir });
+    const probe = await startHubServer({ port: 0, stateDir });
     const port = probe.port;
-    probe.stop();
+    await probe.stop();
 
     // A persisted registry entry forces slot creation during startup, and an unwritable discovery
     // lock (a directory where the lock file belongs) makes the post-bind lock write throw.
@@ -292,19 +295,19 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const lockPath = join(stateDir, `hub.${port}.json`);
     mkdirSync(lockPath);
 
-    expect(() => startHubServer({ port, stateDir })).toThrow();
+    await expect(startHubServer({ port, stateDir })).rejects.toThrow();
 
     // The failed startup released the port: after removing the fake lock, the same port binds again,
     // and the rehydrated registry still carries the seeded membership.
     rmSync(lockPath, { recursive: true, force: true });
-    const rebound = startHubServer({ port, stateDir });
+    const rebound = await startHubServer({ port, stateDir });
     try {
       const list = JSON.parse(
         readFileSync(join(stateDir, `projects.${port}.json`), "utf8")
       ) as ProjectsRegistryFile;
       expect(list.projects.map((p) => p.slug)).toEqual(["startup-a"]);
     } finally {
-      rebound.stop();
+      await rebound.stop();
     }
   });
 
@@ -360,12 +363,9 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     async () => {
       const repoA = makeRepo("link-start", "Link Start", "feat-start");
       const repoB = makeRepo("link-join", "Link Join", "feat-join");
-      const cliPath = join(import.meta.dir, "../src/cli.ts");
       const spawnView = (args: string[]) =>
-        Bun.spawn([process.execPath, "run", cliPath, "view", "--no-open", ...args], {
-          env: { ...process.env, PROJECT_PULSE_HOME: stateDir },
-          stdout: "pipe",
-          stderr: "pipe",
+        spawnCli(["view", "--no-open", ...args], {
+          env: { PROJECT_PULSE_HOME: stateDir },
         });
 
       // Initial start prints two links (overview + project); joining prints the same pair.
@@ -422,18 +422,12 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const repoA = makeRepo("cli-hub-a", "CLI Hub A", "feat-a");
     const repoB = makeRepo("cli-standalone", "CLI Standalone", "feat-b");
 
-    hub = startHubServer({ port: 0, stateDir });
-    const cliPath = join(import.meta.dir, "../src/cli.ts");
+    hub = await startHubServer({ port: 0, stateDir });
 
     // 1. CLI pp view auto-joins running hub and exits 0 immediately
-    const joinProc = Bun.spawn(
-      [process.execPath, "run", cliPath, "view", "--root", repoA, "--port", String(hub.port), "--no-open"],
-      {
-        env: { ...process.env, PROJECT_PULSE_HOME: stateDir },
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
+    const joinProc = spawnCli(["view", "--root", repoA, "--port", String(hub.port), "--no-open"], {
+      env: { PROJECT_PULSE_HOME: stateDir },
+    });
     const [joinOut, joinErr, joinCode] = await Promise.all([
       new Response(joinProc.stdout).text(),
       new Response(joinProc.stderr).text(),
@@ -450,13 +444,9 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     expect(joinOut).not.toContain(`(overview: http://127.0.0.1:${hub.port}/)`);
 
     // 2. CLI pp view --standalone starts isolated server cleanly even with --port
-    const standaloneProc = Bun.spawn(
-      [process.execPath, "run", cliPath, "view", "--root", repoB, "--standalone", "--port", "0", "--no-open"],
-      {
-        env: { ...process.env, PROJECT_PULSE_HOME: stateDir },
-        stdout: "pipe",
-        stderr: "pipe",
-      }
+    const standaloneProc = spawnCli(
+      ["view", "--root", repoB, "--standalone", "--port", "0", "--no-open"],
+      { env: { PROJECT_PULSE_HOME: stateDir } }
     );
     const reader = standaloneProc.stdout.getReader();
     const decoder = new TextDecoder();

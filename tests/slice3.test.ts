@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMcpHandler } from "../src/mcp";
 import { RoadmapService } from "../src/store";
+import { expectQuietStderr, runCliCaptured } from "./helpers/cli";
 
 let tempDir: string;
 
@@ -17,21 +18,14 @@ afterEach(() => {
 
 describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => {
   test("pp init --agents-snippet prints agent onboarding guidance", async () => {
-    const proc = Bun.spawn(
-      [
-        process.execPath,
-        "run",
-        join(import.meta.dir, "../src/cli.ts"),
-        "init",
-        "--root",
-        tempDir,
-        "--name",
-        "MCP Repo",
-        "--agents-snippet",
-      ],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const { code, stdout } = await runCliCaptured([
+      "init",
+      "--root",
+      tempDir,
+      "--name",
+      "MCP Repo",
+      "--agents-snippet",
+    ]);
     expect(code).toBe(0);
     expect(stdout).toContain("Never edit `ROADMAP.md`");
     expect(stdout).toContain("pp summary");
@@ -133,22 +127,11 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
     ];
 
     const stdinPayload = `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`;
-    const proc = Bun.spawn(
-      [process.execPath, "run", join(import.meta.dir, "../src/cli.ts"), "mcp", "--root", tempDir],
-      {
-        stdin: new Blob([stdinPayload]),
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
+    const { stdout, stderr, code } = await runCliCaptured(["mcp", "--root", tempDir], {
+      stdin: stdinPayload,
+    });
 
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-
-    expect(stderr).toBe("");
+    expectQuietStderr(stderr, "pp mcp");
     expect(code).toBe(0);
 
     const responses = stdout

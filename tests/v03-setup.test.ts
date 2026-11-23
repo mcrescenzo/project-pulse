@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import {
   AGENTS_BLOCK_END,
   AGENTS_BLOCK_START,

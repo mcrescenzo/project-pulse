@@ -19,6 +19,7 @@ import {
   withSecurityHeaders,
   writePrivateFile,
 } from "./http-security";
+import { startHttpServer } from "./http-server";
 import { CONFIG_FILE_NAME, PULSE_DIR_NAME, RoadmapService } from "./store";
 import { createProjectSlot, validateMutationRequest, type ProjectSlot } from "./view";
 
@@ -79,7 +80,6 @@ export interface HubServerOptions {
 }
 
 export interface HubServerHandle {
-  server: ReturnType<typeof Bun.serve>;
   port: number;
   url: string;
   stateDir: string;
@@ -90,7 +90,8 @@ export interface HubServerHandle {
   registerProject: (rootDir: string) => RegisteredProjectRecord;
   removeProject: (slug: string) => boolean;
   listProjects: () => HubProjectSummary[];
-  stop: () => void;
+  /** Closes the listener and all slots and removes this hub's lock file; idempotent. */
+  stop: () => Promise<void>;
 }
 
 export interface JoinOrStartHubOptions {
@@ -179,8 +180,10 @@ function readJsonFile<T>(filePath: string): T | null {
 
 /**
  * Starts the shared local multi-project hub server serving `/` portfolio and `/p/<slug>` dashboards.
+ * Resolves only once the listener is bound (dynamic port 0 resolved); a bind failure rejects without
+ * touching any persisted hub state.
  */
-export function startHubServer(options: HubServerOptions = {}): HubServerHandle {
+export async function startHubServer(options: HubServerOptions = {}): Promise<HubServerHandle> {
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? DEFAULT_HUB_PORT;
   const stateDir = resolveHubStateDir(options.stateDir);
@@ -517,19 +520,16 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     return new Response("Not Found", { status: 404 });
   };
 
-  const server = Bun.serve({
+  const http = await startHttpServer({
     hostname,
     port: requestedPort,
-    idleTimeout: 255,
-    async fetch(req) {
-      return withSecurityHeaders(await route(req));
-    },
+    handler: async (req) => withSecurityHeaders(await route(req)),
   });
 
   // The server is listening, so dynamic port 0 has resolved: scope state files to the actual port.
   // Rehydrating only after a successful bind also means a failed start (port already in use) never
   // touches another hub's persisted state.
-  boundPort = server.port ?? requestedPort;
+  boundPort = http.port;
 
   try {
     // Rehydrate still-valid projects from this port's persisted registry.
@@ -575,20 +575,20 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
       slot.close();
     }
     slotsBySlug.clear();
-    server.stop(true);
+    await http.stop();
     throw error;
   }
 
   const hubUrl = `http://${hostname}:${boundPort}`;
 
-  const stop = () => {
+  const stop = async () => {
     if (stopped) return;
     stopped = true;
     for (const slot of slotsBySlug.values()) {
       slot.close();
     }
     slotsBySlug.clear();
-    server.stop(true);
+    await http.stop();
     const currentLock = readJsonFile<HubLockFile>(hubLockPathFor(stateDir, boundPort));
     if (currentLock && currentLock.pid === process.pid && currentLock.token === token) {
       try {
@@ -600,7 +600,6 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
   };
 
   return {
-    server,
     port: boundPort,
     url: hubUrl,
     stateDir,
@@ -612,6 +611,20 @@ export function startHubServer(options: HubServerOptions = {}): HubServerHandle 
     listProjects,
     stop,
   };
+}
+
+/**
+ * Fetch with one fresh-connection retry. After a hub restart on the same port, a pooled
+ * keep-alive socket can be dead without the pool noticing (UND_ERR_SOCKET "other side closed");
+ * the retry's new connection distinguishes that transient from a real outage. A second failure
+ * propagates to the caller.
+ */
+async function fetchHub(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return await fetch(url, init);
+  }
 }
 
 /**
@@ -631,7 +644,7 @@ export async function joinOrStartHub(
 
   let healthRes: Response | null = null;
   try {
-    healthRes = await fetch(`${hubBase}/api/hub/health`, {
+    healthRes = await fetchHub(`${hubBase}/api/hub/health`, {
       signal: AbortSignal.timeout(400),
     });
   } catch {
@@ -661,14 +674,21 @@ export async function joinOrStartHub(
       );
     }
 
-    const regRes = await fetch(`${hubBase}/api/hub/register`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-PP-Hub-Token": lockFile.token,
-      },
-      body: JSON.stringify({ rootDir: service.rootDir }),
-    });
+    let regRes: Response;
+    try {
+      regRes = await fetchHub(`${hubBase}/api/hub/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-PP-Hub-Token": lockFile.token,
+        },
+        body: JSON.stringify({ rootDir: service.rootDir }),
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to register with running hub at ${hubBase}: ${(error as Error).message}`
+      );
+    }
     const regJson = (await regRes.json().catch(() => ({}))) as {
       ok?: boolean;
       slug?: string;
@@ -699,7 +719,7 @@ export async function joinOrStartHub(
 
   let handle: HubServerHandle;
   try {
-    handle = startHubServer({
+    handle = await startHubServer({
       port,
       hostname,
       beadsClient: options.beadsClient,

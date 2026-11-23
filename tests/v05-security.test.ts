@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync, spawn as nodeSpawn } from "node:child_process";
 import {
   chmodSync,
   lstatSync,
@@ -24,6 +25,8 @@ import {
   tokensEqual,
 } from "../src/http-security";
 import { RoadmapService } from "../src/store";
+import { runCliCaptured, which } from "./helpers/cli";
+import { drainChildStream, ensureFixture, exitPromise } from "./helpers/fixtures";
 
 let tempDir: string;
 
@@ -38,9 +41,9 @@ afterEach(() => {
 // Same helper as tests/v03-digest.test.ts: fail loudly instead of cascading into
 // confusing downstream git failures.
 function git(args: string[], cwd: string): void {
-  const res = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  if (res.exitCode !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(res.stderr)}`);
+  const res = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${res.stderr}`);
   }
 }
 
@@ -152,17 +155,17 @@ describe("v0.5 public release security hardening", () => {
   test("concurrent first launches adopt one persisted 0600 token", async () => {
     const stateDir = join(tempDir, "race-state");
     // Separate processes hit the same state dir exactly like simultaneous `pp view` launches.
-    const launcher = join(tempDir, "token-launcher.ts");
-    const httpSecurityPath = join(import.meta.dir, "../src/http-security.ts").replaceAll("\\", "/");
-    writeFileSync(
-      launcher,
-      `import { loadOrCreateAccessToken } from "${httpSecurityPath}";\n` +
-        `process.stdout.write(loadOrCreateAccessToken(process.argv[2]!));\n`
-    );
-    const procs = Array.from({ length: 6 }, () =>
-      Bun.spawn([process.execPath, "run", launcher, stateDir], { stdout: "pipe", stderr: "pipe" })
-    );
-    const tokens = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+    // The launcher is a bundled test-only fixture (never dist/), executed by the test runtime.
+    const launcher = ensureFixture("token-launcher");
+    const procs = Array.from({ length: 6 }, () => {
+      const child = nodeSpawn(process.execPath, [launcher, stateDir], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      // The exit promise is captured at spawn time: the close event may fire before the
+      // code below gets around to awaiting it.
+      return { child, exited: exitPromise(child) };
+    });
+    const tokens = await Promise.all(procs.map((p) => drainChildStream(p.child.stdout!)));
     const exits = await Promise.all(procs.map((p) => p.exited));
     expect(exits).toEqual(Array(6).fill(0));
 
@@ -195,11 +198,9 @@ describe("v0.5 public release security hardening", () => {
       JSON.stringify({ jsonrpc: "2.0", id: 8, method: 123 }),
       JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/list" }),
     ];
-    const proc = Bun.spawn(
-      [process.execPath, "run", join(import.meta.dir, "../src/cli.ts"), "mcp", "--root", tempDir],
-      { stdin: new Blob([`${lines.join("\n")}\n`]), stdout: "pipe", stderr: "pipe" }
-    );
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const { stdout, code } = await runCliCaptured(["mcp", "--root", tempDir], {
+      stdin: `${lines.join("\n")}\n`,
+    });
     expect(code).toBe(0);
     const responses = stdout
       .trim()
@@ -239,7 +240,7 @@ describe("v0.5 public release security hardening", () => {
     // the failure itself stays genuine. `--pp-fixture-ref` is a harmless unrecognized
     // synthetic operand — deliberately never a write-capable pseudo-option like --output=.
     const flagRef = "--pp-fixture-ref";
-    const realGit = Bun.which("git");
+    const realGit = which("git");
     expect(realGit).toBeTruthy();
     const gitArgvLog = join(tempDir, "git-argv.log");
     const shimDir = join(tempDir, "git-shim-bin");
@@ -251,29 +252,18 @@ describe("v0.5 public release security hardening", () => {
     );
     chmodSync(gitShim, 0o755);
 
-    // The probe runs in a child bun process whose env — never the test runner's PATH —
-    // carries the shim dir, so git resolves to the recorder there and to real git everywhere
-    // else. The child reports the mapped error message (or "resolved") on stdout.
-    const digestModulePath = join(import.meta.dir, "../src/digest.ts").replaceAll("\\", "/");
-    const probe = join(tempDir, "digest-probe.ts");
-    writeFileSync(
-      probe,
-      `import { buildDigest } from "${digestModulePath}";\n` +
-        `try {\n` +
-        `  buildDigest(${JSON.stringify(tempDir)}, { since: ${JSON.stringify(flagRef)} });\n` +
-        `  process.stdout.write("resolved");\n` +
-        `} catch (error) {\n` +
-        `  process.stdout.write((error as Error).message);\n` +
-        `}\n`
-    );
-    const probeRes = Bun.spawnSync([process.execPath, "run", probe], {
+    // The probe runs in a child process of the same runtime as the test; its env — never the
+    // test runner's PATH — carries the shim dir, so git resolves to the recorder there and to
+    // real git everywhere else. The child reports the mapped error message (or "resolved") on
+    // stdout. The fixture is bundled JS (never dist/); argv carries rootDir and the ref.
+    const probe = ensureFixture("digest-probe");
+    const probeRes = spawnSync(process.execPath, [probe, tempDir, flagRef], {
       cwd: tempDir,
       env: { ...process.env, PATH: `${shimDir}${delimiter}${process.env.PATH ?? ""}` },
-      stdout: "pipe",
-      stderr: "pipe",
+      encoding: "utf8",
     });
-    expect(probeRes.exitCode).toBe(0);
-    expect(new TextDecoder().decode(probeRes.stdout).trim()).toBe(
+    expect(probeRes.status).toBe(0);
+    expect((probeRes.stdout ?? "").trim()).toBe(
       "Could not resolve git ref '--pp-fixture-ref'"
     );
 

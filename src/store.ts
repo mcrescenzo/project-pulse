@@ -9,6 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { parse as yamlParse } from "yaml";
 import { CliBeadsClient, evaluateBeadsDrift, extractBeadRefs, type BeadsClient } from "./beads";
 import {
   parseMarkdownFile,
@@ -652,7 +653,7 @@ export class RoadmapService {
   private loadConfigChecked(): { config: PulseConfig; issues: ValidationIssue[] } {
     this.requireInitialized();
     const raw = readFileSync(this.configPath, "utf8");
-    const parsed = Bun.YAML.parse(raw);
+    const parsed = yamlParse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`Invalid YAML in ${this.configPath}`);
     }

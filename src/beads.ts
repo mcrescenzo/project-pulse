@@ -1,4 +1,31 @@
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import type { BeadStatusInfo, Feature, ValidationIssue } from "./types";
+
+/** Stdio shape used for bd subprocesses: stdin ignored, stdout/stderr piped. */
+type PipedChild = ChildProcessByStdio<null, Readable, Readable>;
+
+/** Collects a child stdio stream to a UTF-8 string; first of `end`/`close`/`error` settles. */
+function drainStream(stream: Readable): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const chunks: Buffer[] = [];
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const settle = () => resolve(Buffer.concat(chunks).toString("utf8"));
+  // `end` is normal completion; `close` also fires when the stream is destroyed without
+  // `end` (e.g. after a failed spawn), so the drain still resolves with whatever arrived.
+  stream.once("end", settle);
+  stream.once("close", settle);
+  stream.once("error", reject);
+  return promise;
+}
+
+/** Resolves with the child's exit code on close (stdio flushed) or rejects on spawn error. */
+function childExitCode(child: ChildProcess): Promise<number | null> {
+  const { promise, resolve, reject } = Promise.withResolvers<number | null>();
+  child.on("error", reject);
+  child.on("close", (code) => resolve(code));
+  return promise;
+}
 
 export interface BeadsClient {
   resolveRefs(refs: string[], cwd: string): Promise<BeadStatusInfo[]>;
@@ -78,25 +105,32 @@ export class CliBeadsClient implements BeadsClient {
     return out;
   }
 
+  /** Maps an async spawn failure (e.g. ENOENT) to the same unavailable result as a throw. */
+  private spawnFailed(
+    ids: string[],
+    error: unknown
+  ): Map<string, Omit<BeadStatusInfo, "ref">> {
+    return this.markAll(ids, (id) => ({
+      id,
+      available: false,
+      found: false,
+      error: `Failed to spawn ${this.bdBin}: ${(error as Error).message}`,
+    }));
+  }
+
   private async fetchBatch(
     ids: string[],
     cwd: string
   ): Promise<Map<string, Omit<BeadStatusInfo, "ref">>> {
-    let proc: ReturnType<typeof Bun.spawn>;
+    let proc: PipedChild;
     try {
       // `--` ends option parsing so a ref like `bd:--foo` can never be interpreted as a bd flag.
-      proc = Bun.spawn([this.bdBin, "--readonly", "show", "--json", "--", ...ids], {
+      proc = spawn(this.bdBin, ["--readonly", "show", "--json", "--", ...ids], {
         cwd,
-        stdout: "pipe",
-        stderr: "pipe",
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      return this.markAll(ids, (id) => ({
-        id,
-        available: false,
-        found: false,
-        error: `Failed to spawn ${this.bdBin}: ${(error as Error).message}`,
-      }));
+      return this.spawnFailed(ids, error);
     }
 
     let timedOut = false;
@@ -110,11 +144,23 @@ export class CliBeadsClient implements BeadsClient {
     }, this.timeoutMs);
 
     try {
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-        new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-        proc.exited,
-      ]);
+      // Drain stdout/stderr concurrently and settle on close (stdio flushed and the process
+      // reaped). A spawn failure surfaces asynchronously on `error`, mapped to the same
+      // unavailable result as a synchronous spawn throw.
+      let stdout = "";
+      let stderr = "";
+      let code: number | null = null;
+      try {
+        [stdout, stderr, code] = await Promise.all([
+          drainStream(proc.stdout),
+          drainStream(proc.stderr),
+          childExitCode(proc),
+        ]);
+      } catch (error) {
+        proc.stdout.destroy();
+        proc.stderr.destroy();
+        return this.spawnFailed(ids, error);
+      }
 
       if (timedOut) {
         return this.markAll(ids, (id) => ({

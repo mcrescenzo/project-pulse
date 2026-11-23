@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli } from "../src/cli";
+import { runCli } from "../src/cli-main";
 import { buildChangelog, buildDigest, parseSinceSpec } from "../src/digest";
 import { serializeConfig } from "../src/frontmatter";
 import { RoadmapService } from "../src/store";
@@ -18,9 +19,9 @@ afterEach(() => {
 });
 
 function git(args: string[], cwd: string): void {
-  const res = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  if (res.exitCode !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(res.stderr)}`);
+  const res = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${res.stderr}`);
   }
 }
 
