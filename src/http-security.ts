@@ -1,8 +1,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeFileAtomic } from "./frontmatter";
+import { withStoreLock } from "./store-lock";
 
 /** Query parameter carrying the access token on the URL printed/opened by `pp view`. */
 export const ACCESS_TOKEN_QUERY_PARAM = "t";
@@ -53,26 +54,47 @@ export function writePrivateFile(filePath: string, content: string): void {
 /**
  * Loads the persistent dashboard access token from `<stateDir>/access-token`, creating it (0600) if absent.
  * A persistent token keeps bookmarked dashboard tabs working across `pp view` restarts.
+ *
+ * A well-formed token is adopted without locking (the hot path). Only a missing or malformed token
+ * file takes the shipped kernel store lock, so concurrent first launches serialize: whoever holds
+ * the lock first publishes its finished token atomically (staged 0600 temp + rename, via
+ * `writePrivateFile`) and racers re-read and adopt that winner instead of rotating it. The lock is
+ * a SQLite file lock, so a crashed holder releases it automatically, and a wedged one trips the
+ * bounded wait into a retryable conflict instead of a hang.
  */
 export function loadOrCreateAccessToken(stateDir: string): string {
   ensurePrivateDir(stateDir);
   const tokenPath = join(stateDir, ACCESS_TOKEN_FILE);
-  if (existsSync(tokenPath)) {
-    try {
-      const existing = readFileSync(tokenPath, "utf8").trim();
-      if (ACCESS_TOKEN_RE.test(existing)) return existing;
-    } catch {
-      // Fall through and regenerate an unreadable/corrupt token
-    }
-  }
-  const token = generateAccessToken();
-  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+
+  const persisted = readPersistedToken(tokenPath);
+  if (persisted) return persisted;
+
+  return withStoreLock(stateDir, () => {
+    // Re-read under the lock: a racer that published first left the winner behind.
+    const winner = readPersistedToken(tokenPath);
+    if (winner) return winner;
+
+    const token = generateAccessToken();
+    writePrivateFile(tokenPath, `${token}\n`);
+    return token;
+  });
+}
+
+/**
+ * The persisted token string, or null when the file is absent (caller may create it) or its bytes
+ * are malformed (caller recovers under the lock). Any other I/O error propagates.
+ */
+function readPersistedToken(tokenPath: string): string | null {
+  let raw: string;
   try {
-    chmodSync(tokenPath, 0o600);
-  } catch {
-    // Best-effort on platforms without POSIX modes
+    raw = readFileSync(tokenPath, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") return null;
+    throw error;
   }
-  return token;
+  const existing = raw.trim();
+  return ACCESS_TOKEN_RE.test(existing) ? existing : null;
 }
 
 export function buildAllowedHosts(boundPort: number, hostname: string): Set<string> {
