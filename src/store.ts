@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { CliBeadsClient, evaluateBeadsDrift, extractBeadRefs, type BeadsClient } from "./beads";
 import {
@@ -40,6 +49,12 @@ export const FEATURES_DIR_NAME = "features";
 export const ROADMAP_FILE_NAME = "ROADMAP.md";
 
 const VALID_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * Selectors made only of digits mean the user-visible 1-based position, never a criterion id
+ * (pp-f7m.12): criterion ids that look like positions would make checkbox selection ambiguous.
+ */
+const NUMERIC_SELECTOR_RE = /^\d+$/;
 
 export interface LoadedStore {
   config: PulseConfig;
@@ -206,6 +221,12 @@ function slugifyCriterionId(text: string, usedIds: Set<string>, index: number): 
     .join("-")
     .slice(0, 32);
   let candidate = base || `c-${index + 1}`;
+  // Never generate a numeric-only id (pp-f7m.12): UI clients address criteria by id, and the
+  // CLI treats digit-only selectors as 1-based positions, so "1" from text like "≤1%" would
+  // make clicks and commands hit the wrong checkbox.
+  if (NUMERIC_SELECTOR_RE.test(candidate)) {
+    candidate = `c-${candidate}`;
+  }
   if (!usedIds.has(candidate)) {
     usedIds.add(candidate);
     return candidate;
@@ -227,14 +248,36 @@ function normalizeCriteriaInput(
   const result: ShipCriterion[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    if (typeof item === "string") {
-      const id = slugifyCriterionId(item, usedIds, i);
-      result.push({ id, text: item.trim(), done: false });
-    } else {
-      const id = item.id?.trim() || slugifyCriterionId(item.text, usedIds, i);
-      usedIds.add(id);
-      result.push({ id, text: item.text.trim(), done: Boolean(item.done) });
+    const text = (typeof item === "string" ? item : item.text).trim();
+    if (!text) {
+      throw new Error(
+        `Ship criterion at position ${i + 1} has blank text; criterion text must be non-empty`
+      );
     }
+    let id: string;
+    if (typeof item === "string") {
+      id = slugifyCriterionId(text, usedIds, i);
+    } else {
+      const explicit = item.id?.trim();
+      if (explicit) {
+        if (NUMERIC_SELECTOR_RE.test(explicit)) {
+          throw new Error(
+            `Ship criterion id '${explicit}' is numeric; digit-only selectors mean 1-based ` +
+              `positions, so criterion ids must contain at least one non-digit character`
+          );
+        }
+        if (usedIds.has(explicit)) {
+          throw new Error(
+            `Duplicate ship criterion id '${explicit}' at position ${i + 1}; criterion ids must be unique`
+          );
+        }
+        id = explicit;
+      } else {
+        id = slugifyCriterionId(text, usedIds, i);
+      }
+    }
+    usedIds.add(id);
+    result.push({ id, text, done: typeof item === "object" && Boolean(item.done) });
   }
   return result;
 }
@@ -248,9 +291,43 @@ function dedupeStrings(values: string[]): string[] {
   return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item));
+/** Human-readable type name for diagnostics; names null and lists instead of "object". */
+function describeValueType(value: unknown): string {
+  return value === null ? "null" : Array.isArray(value) ? "list" : typeof value;
+}
+
+function asStringArray(
+  value: unknown,
+  field: "depends_on" | "refs",
+  featureId: string,
+  parseIssues: ValidationIssue[]
+): string[] {
+  if (value === undefined || value === null) return [];
+  const code = field === "depends_on" ? "INVALID_DEPENDS_ON" : "INVALID_REFS";
+  if (!Array.isArray(value)) {
+    parseIssues.push({
+      level: "error",
+      code,
+      entityId: featureId,
+      message: `Feature '${featureId}' ${field} must be a list of strings (got ${describeValueType(value)})`,
+    });
+    return [];
+  }
+  const result: string[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i];
+    if (typeof item !== "string") {
+      parseIssues.push({
+        level: "error",
+        code,
+        entityId: featureId,
+        message: `Feature '${featureId}' ${field}[${i}] must be a string (got ${describeValueType(item)})`,
+      });
+      continue;
+    }
+    result.push(item);
+  }
+  return result;
 }
 
 function parseShipCriteria(
@@ -268,7 +345,10 @@ function parseShipCriteria(
     });
     return [];
   }
-  const result: ShipCriterion[] = [];
+  // Pass 1: validate shapes, diagnose duplicate canonical ids, and decide which entries keep
+  // their stored id versus need a display alias.
+  const entries: Array<{ id: string | null; text: string; done: boolean }> = [];
+  const seenIds = new Map<string, number>();
   for (let i = 0; i < value.length; i++) {
     const raw = value[i];
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -281,11 +361,79 @@ function parseShipCriteria(
       continue;
     }
     const obj = raw as Record<string, unknown>;
-    result.push({
-      id: typeof obj.id === "string" && obj.id.trim() ? obj.id : `c-${i + 1}`,
-      text: typeof obj.text === "string" ? obj.text : "",
-      done: Boolean(obj.done),
-    });
+    const rawId = obj.id;
+    let id: string | null = null;
+    let canonical: string | null = null;
+    if (typeof rawId === "string") {
+      const trimmed = rawId.trim();
+      canonical = trimmed === "" ? null : trimmed;
+      id = trimmed !== "" && !NUMERIC_SELECTOR_RE.test(trimmed) ? trimmed : null;
+    } else if (typeof rawId === "number" && Number.isFinite(rawId)) {
+      canonical = String(rawId);
+      id = NUMERIC_SELECTOR_RE.test(canonical) ? null : canonical;
+    } else if (rawId !== undefined && rawId !== null) {
+      parseIssues.push({
+        level: "error",
+        code: "INVALID_SHIP_CRITERIA",
+        entityId: featureId,
+        message: `Feature '${featureId}' ship_criteria[${i}] id must be a string (got ${describeValueType(rawId)})`,
+      });
+    }
+    if (canonical) {
+      const firstAt = seenIds.get(canonical);
+      if (firstAt === undefined) {
+        seenIds.set(canonical, i);
+      } else {
+        parseIssues.push({
+          level: "error",
+          code: "DUPLICATE_SHIP_CRITERION_ID",
+          entityId: featureId,
+          message: `Feature '${featureId}' ship_criteria entries ${firstAt + 1} and ${i + 1} share id '${canonical}'; criterion ids must be unique so checkbox selection is unambiguous`,
+        });
+      }
+    }
+    const text = typeof obj.text === "string" ? obj.text : "";
+    if (!text.trim()) {
+      parseIssues.push({
+        level: "error",
+        code: "INVALID_SHIP_CRITERIA",
+        entityId: featureId,
+        message: `Feature '${featureId}' ship_criteria[${i}] text must be a non-empty string`,
+      });
+    }
+    if (obj.done !== undefined && obj.done !== null && typeof obj.done !== "boolean") {
+      parseIssues.push({
+        level: "error",
+        code: "INVALID_SHIP_CRITERIA",
+        entityId: featureId,
+        message: `Feature '${featureId}' ship_criteria[${i}] done must be a boolean (got ${describeValueType(obj.done)})`,
+      });
+    }
+    entries.push({ id, text, done: obj.done === true });
+  }
+
+  // Pass 2: reserve every stored non-numeric id, then give digit-only (legacy) and missing ids
+  // deterministic, collision-free display aliases. A UNIQUE numeric id is normalized silently —
+  // never a fatal issue, so the store stays mutable and the user can unstick it via the CLI —
+  // and the alias is persisted over the stored canonical on that feature's next mutation.
+  const usedIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.id !== null) usedIds.add(entry.id);
+  }
+  const result: ShipCriterion[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    let id = entry.id;
+    if (id === null) {
+      id = `c-${i + 1}`;
+      let suffix = 2;
+      while (usedIds.has(id)) {
+        id = `c-${i + 1}-${suffix}`;
+        suffix++;
+      }
+    }
+    usedIds.add(id);
+    result.push({ id, text: entry.text, done: entry.done });
   }
   return result;
 }
@@ -325,6 +473,20 @@ function parseUpdates(
   }
   return result;
 }
+
+/**
+ * Undo state for a multi-file mutation (pp-f7m.26). `snapshots` are recorded only after a
+ * dependent file was successfully overwritten, so rollback never rewrites an unchanged target;
+ * `staged` entries are entity files moved aside instead of unlinked, so a failure renames them
+ * back without losing symlinks or file permissions.
+ */
+interface MutationUndo {
+  snapshots: Array<{ path: string; previous: string }>;
+  staged: Array<{ originalPath: string; stagedPath: string }>;
+}
+
+/** Makes staged removal names unique across calls and processes (timestamp + in-process seq). */
+let removalSeq = 0;
 
 /**
  * File-backed domain service operating on a repository root's `.project-pulse/` directory.
@@ -377,6 +539,12 @@ export class RoadmapService {
   }
 
   init(options?: InitOptions): InitResult {
+    // Reject a blank name before touching anything (pp-f7m.27): a rejected init must leave
+    // the repo exactly as it was, with no blank name persisted into config.yaml. A blank
+    // summary stays valid — it is a legitimate way to clear it — so only names are refused.
+    if (options?.name !== undefined && options.name.trim() === "") {
+      throw new Error("Project name must be non-empty; omit --name to use the directory name");
+    }
     // Refuse before touching anything so a rejected init leaves the repo exactly as it was.
     this.assertRoadmapReplaceable(options);
     return this.mutate(() => this.initLocked(options));
@@ -408,14 +576,34 @@ export class RoadmapService {
 
     let config: PulseConfig;
     if (alreadyExists) {
-      config = this.loadConfig();
-      if (options?.name) {
-        config.project.name = options.name;
+      const checked = this.loadConfigChecked();
+      config = checked.config;
+      // Refuse before rewriting user files (pp-f7m.27): re-initializing a store with an
+      // unsupported schema version or ill-typed fields would re-serialize the coerced values,
+      // cementing a lossy rewrite of config.yaml (and the rendered roadmap).
+      if (config.version !== 1) {
+        throw new Error(
+          `Unsupported config version ${String(config.version)}; expected 1. Fix ${PULSE_DIR_NAME}/${CONFIG_FILE_NAME} before re-running init.`
+        );
       }
-      if (options?.summary) {
-        config.project.summary = options.summary;
+      if (checked.issues.length > 0) {
+        throw new Error(
+          `Refusing to rewrite ${PULSE_DIR_NAME}/${CONFIG_FILE_NAME} with lossy changes: ${checked.issues
+            .map((i) => i.message)
+            .join("; ")}`
+        );
       }
-      if (options?.name || options?.summary) {
+      const name = options?.name?.trim();
+      if (name) {
+        config.project.name = name;
+      }
+      // An explicit summary (including an empty one, i.e. clearing it) is valid; apply it
+      // trimmed. Omitting the flag keeps the stored summary untouched.
+      const summaryGiven = options?.summary !== undefined;
+      if (summaryGiven) {
+        config.project.summary = options.summary!.trim();
+      }
+      if (name || summaryGiven) {
         writeFileAtomic(this.configPath, serializeConfig(config));
       }
     } else {
@@ -451,6 +639,17 @@ export class RoadmapService {
   }
 
   loadConfig(): PulseConfig {
+    return this.loadConfigChecked().config;
+  }
+
+  /**
+   * Loads config.yaml while diagnosing ill-typed fields instead of silently coercing them
+   * (pp-f7m.27): a stored `enabled: "false"` must surface as an error, not flip to `true`.
+   * Present-but-wrong values — nulls and non-object sections included — are flagged; omitted
+   * fields keep their documented defaults, so accepted legacy formatting is preserved while
+   * lossy rewrites are refused.
+   */
+  private loadConfigChecked(): { config: PulseConfig; issues: ValidationIssue[] } {
     this.requireInitialized();
     const raw = readFileSync(this.configPath, "utf8");
     const parsed = Bun.YAML.parse(raw);
@@ -458,41 +657,77 @@ export class RoadmapService {
       throw new Error(`Invalid YAML in ${this.configPath}`);
     }
     const obj = parsed as Record<string, unknown>;
-    const project = (obj.project && typeof obj.project === "object" ? obj.project : {}) as Record<
-      string,
-      unknown
-    >;
-    const defaults = (obj.defaults && typeof obj.defaults === "object" ? obj.defaults : {}) as Record<
-      string,
-      unknown
-    >;
-    const integrations = (
-      obj.integrations && typeof obj.integrations === "object" ? obj.integrations : {}
-    ) as Record<string, unknown>;
-    const beads = (
-      integrations.beads && typeof integrations.beads === "object" ? integrations.beads : {}
-    ) as Record<string, unknown>;
+
+    const issues: ValidationIssue[] = [];
+    const asSection = (name: string, value: unknown): Record<string, unknown> => {
+      if (value === undefined) return {};
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+      issues.push({
+        level: "error",
+        code: "INVALID_CONFIG_FIELD",
+        message: `config.yaml section '${name}' must be a mapping (got ${describeValueType(value)})`,
+      });
+      return {};
+    };
+    const flagField = (field: string, value: unknown, expected: string): void => {
+      issues.push({
+        level: "error",
+        code: "INVALID_CONFIG_FIELD",
+        message: `config.yaml field '${field}' must be ${expected} (got ${describeValueType(value)})`,
+      });
+    };
+
+    const project = asSection("project", obj.project);
+    const defaults = asSection("defaults", obj.defaults);
+    const integrations = asSection("integrations", obj.integrations);
+    const beads = asSection("integrations.beads", integrations.beads);
+
+    if (project.name !== undefined && typeof project.name !== "string") {
+      flagField("project.name", project.name, "a string");
+    }
+    if (project.summary !== undefined && typeof project.summary !== "string") {
+      flagField("project.summary", project.summary, "a string");
+    }
+    if (defaults.milestone !== undefined && typeof defaults.milestone !== "string") {
+      flagField("defaults.milestone", defaults.milestone, "a string");
+    }
+
+    const enabledRaw = beads.enabled;
+    let enabled: boolean;
+    if (enabledRaw === undefined) {
+      enabled = true; // documented default
+    } else if (enabledRaw === true || enabledRaw === false) {
+      enabled = enabledRaw;
+    } else {
+      flagField("integrations.beads.enabled", enabledRaw, "a boolean");
+      enabled = false;
+    }
 
     return {
-      version: typeof obj.version === "number" ? obj.version : Number(obj.version ?? 0),
-      project: {
-        name: typeof project.name === "string" ? project.name : "",
-        summary: typeof project.summary === "string" ? project.summary : "",
-      },
-      defaults: {
-        milestone: typeof defaults.milestone === "string" ? defaults.milestone : "backlog",
-      },
-      integrations: {
-        beads: {
-          enabled: beads.enabled === undefined ? true : Boolean(beads.enabled),
+      config: {
+        version: typeof obj.version === "number" ? obj.version : Number(obj.version ?? 0),
+        project: {
+          name: typeof project.name === "string" ? project.name : "",
+          summary: typeof project.summary === "string" ? project.summary : "",
+        },
+        defaults: {
+          milestone: typeof defaults.milestone === "string" ? defaults.milestone : "backlog",
+        },
+        integrations: {
+          beads: {
+            enabled,
+          },
         },
       },
+      issues,
     };
   }
 
   load(): LoadedStore {
-    const config = this.loadConfig();
-    const parseIssues: ValidationIssue[] = [];
+    const { config, issues: configIssues } = this.loadConfigChecked();
+    const parseIssues: ValidationIssue[] = [...configIssues];
     const milestones: Milestone[] = [];
     const features: Feature[] = [];
 
@@ -560,8 +795,8 @@ export class RoadmapService {
             order: typeof fm.order === "number" ? fm.order : Number(fm.order ?? 100),
             status: (typeof fm.status === "string" ? fm.status : "") as FeatureStatus,
             area: typeof fm.area === "string" && fm.area !== "" ? fm.area : undefined,
-            depends_on: asStringArray(fm.depends_on),
-            refs: asStringArray(fm.refs),
+            depends_on: asStringArray(fm.depends_on, "depends_on", id, parseIssues),
+            refs: asStringArray(fm.refs, "refs", id, parseIssues),
             ship_criteria: parseShipCriteria(fm.ship_criteria, id, parseIssues),
             updates: parseUpdates(fm.updates, id, parseIssues),
             description: parsed.body,
@@ -760,13 +995,21 @@ export class RoadmapService {
     criterionIdOrIndex: string,
     featureId: string
   ): number {
-    let idx = criteria.findIndex((c) => c.id === criterionIdOrIndex);
-    if (idx === -1 && /^\d+$/.test(criterionIdOrIndex)) {
+    // Digit-only selectors always mean the user-visible 1-based position (pp-f7m.12), so a
+    // stored criterion id like "1" can never capture or shadow the ordinal selector.
+    if (NUMERIC_SELECTOR_RE.test(criterionIdOrIndex)) {
+      if (criteria.length === 0) {
+        throw new Error(`Feature '${featureId}' has no ship criteria to select`);
+      }
       const oneBased = Number.parseInt(criterionIdOrIndex, 10);
       if (oneBased >= 1 && oneBased <= criteria.length) {
-        idx = oneBased - 1;
+        return oneBased - 1;
       }
+      throw new Error(
+        `Ship criterion '${criterionIdOrIndex}' not found on feature '${featureId}': numeric selectors are 1-based positions (1-${criteria.length}); use the criterion's non-numeric id to select by id`
+      );
     }
+    const idx = criteria.findIndex((c) => c.id === criterionIdOrIndex);
     if (idx === -1) {
       throw new Error(
         `Ship criterion '${criterionIdOrIndex}' not found on feature '${featureId}'`
@@ -894,18 +1137,48 @@ export class RoadmapService {
     }
 
     const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
-    for (const dep of updatedDependents) {
-      this.writeFeatureFile(dep);
-    }
-    unlinkSync(join(this.featuresDir, `${id}.md`));
-    const { roadmapPath } = this.render();
+    // Pre-flight and rollback (pp-f7m.26): a failure while rewriting dependents, unlinking the
+    // feature, or re-rendering must leave the prior entities and roadmap untouched.
+    this.assertDirsWritable([
+      { dir: this.featuresDir, label: "features" },
+      { dir: this.rootDir, label: "repository root" },
+    ]);
 
-    return {
-      entity: existing,
-      updatedDependents: updatedDependents.map((d) => d.id),
-      warnings,
-      roadmapPath,
-    };
+    const undo: MutationUndo = { snapshots: [], staged: [] };
+    try {
+      for (const dep of updatedDependents) {
+        const path = join(this.featuresDir, `${dep.id}.md`);
+        const previous = readFileSync(path, "utf8");
+        this.writeFeatureFile(dep);
+        // Recorded only after the write succeeded, so rollback never rewrites an unchanged target.
+        undo.snapshots.push({ path, previous });
+      }
+      const featurePath = join(this.featuresDir, `${id}.md`);
+      undo.staged.push({
+        originalPath: featurePath,
+        stagedPath: this.stageRemoval(featurePath),
+      });
+      const { roadmapPath } = this.render();
+      for (const staged of undo.staged) {
+        unlinkSync(staged.stagedPath);
+      }
+
+      return {
+        entity: existing,
+        updatedDependents: updatedDependents.map((d) => d.id),
+        warnings,
+        roadmapPath,
+      };
+    } catch (error) {
+      const failedPaths = this.rollbackMutation(undo);
+      if (failedPaths.length > 0) {
+        throw new Error(
+          `${(error as Error).message}; rollback failed for: ${failedPaths.join(", ")}`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
   }
 
   removeMilestone(id: string, options: { reassignTo?: string } = {}): RemoveResult<Milestone> {
@@ -961,18 +1234,50 @@ export class RoadmapService {
     const candidateMilestones = loaded.milestones.filter((m) => m.id !== id);
 
     const warnings = this.validateCandidate(loaded.config, candidateMilestones, candidateFeatures);
-    for (const feature of reassignedFeatures) {
-      this.writeFeatureFile(feature);
-    }
-    unlinkSync(join(this.milestonesDir, `${id}.md`));
-    const { roadmapPath } = this.render();
+    // Pre-flight and rollback (pp-f7m.26): moving features before unlinking the milestone means
+    // a failure anywhere (read-only milestones directory, failed dependent write, failed render)
+    // must restore every touched file instead of silently applying a partial move.
+    this.assertDirsWritable([
+      { dir: this.featuresDir, label: "features" },
+      { dir: this.milestonesDir, label: "milestones" },
+      { dir: this.rootDir, label: "repository root" },
+    ]);
 
-    return {
-      entity: existing,
-      reassignedFeatures: reassignedFeatures.map((f) => f.id),
-      warnings,
-      roadmapPath,
-    };
+    const undo: MutationUndo = { snapshots: [], staged: [] };
+    try {
+      for (const feature of reassignedFeatures) {
+        const path = join(this.featuresDir, `${feature.id}.md`);
+        const previous = readFileSync(path, "utf8");
+        this.writeFeatureFile(feature);
+        // Recorded only after the write succeeded, so rollback never rewrites an unchanged target.
+        undo.snapshots.push({ path, previous });
+      }
+      const milestonePath = join(this.milestonesDir, `${id}.md`);
+      undo.staged.push({
+        originalPath: milestonePath,
+        stagedPath: this.stageRemoval(milestonePath),
+      });
+      const { roadmapPath } = this.render();
+      for (const staged of undo.staged) {
+        unlinkSync(staged.stagedPath);
+      }
+
+      return {
+        entity: existing,
+        reassignedFeatures: reassignedFeatures.map((f) => f.id),
+        warnings,
+        roadmapPath,
+      };
+    } catch (error) {
+      const failedPaths = this.rollbackMutation(undo);
+      if (failedPaths.length > 0) {
+        throw new Error(
+          `${(error as Error).message}; rollback failed for: ${failedPaths.join(", ")}`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
   }
 
   checkFeatureCriterion(
@@ -1235,7 +1540,9 @@ export class RoadmapService {
       ),
     ];
     const beadsClient = options.beadsClient ?? new CliBeadsClient();
-    const resolvedMap: Record<string, BeadStatusInfo[]> = {};
+    // Null prototype (pp-f7m.29): otherwise-valid feature ids like 'constructor' must never
+    // resolve to inherited Object.prototype members instead of an empty list.
+    const resolvedMap: Record<string, BeadStatusInfo[]> = Object.create(null);
 
     if (allUniqueRefs.length > 0) {
       const resolvedAll = await beadsClient.resolveRefs(allUniqueRefs, this.rootDir);
@@ -1372,6 +1679,63 @@ export class RoadmapService {
     }
 
     return { feature, milestone, beads };
+  }
+
+  /**
+   * Pre-flight for multi-file mutations (pp-f7m.26): refuse before the first byte moves when a
+   * target directory cannot accept writes, so a read-only milestones directory fails the whole
+   * removal instead of leaving features moved while the milestone (or roadmap) stays behind.
+   */
+  private assertDirsWritable(targets: Array<{ dir: string; label: string }>): void {
+    for (const { dir, label } of targets) {
+      try {
+        accessSync(dir, constants.W_OK);
+      } catch {
+        throw new Error(`Cannot update ${label}: '${dir}' is not writable`);
+      }
+    }
+  }
+
+  /**
+   * Moves a to-be-deleted entity aside to a unique `.tmp.`-prefixed sibling in the same
+   * directory (invisible to store loads) instead of unlinking immediately (pp-f7m.26), so a
+   * later failure renames it back with symlinks and file permissions intact. The caller
+   * unlinks the staged name only after the whole mutation succeeds.
+   */
+  private stageRemoval(path: string): string {
+    const stagedPath = join(
+      dirname(path),
+      `.tmp.pp-remove.${Date.now()}.${++removalSeq}.${basename(path)}`
+    );
+    renameSync(path, stagedPath);
+    return stagedPath;
+  }
+
+  /**
+   * Undoes a failed mutation: renames staged removals back to their original paths (preserving
+   * symlinks and permissions) and rewrites dependents recorded as successfully overwritten.
+   * Returns the paths that could not be restored — never silently ignored — so the caller can
+   * include them in the recovery diagnostic.
+   */
+  private rollbackMutation(undo: MutationUndo): string[] {
+    const failedPaths: string[] = [];
+    for (const staged of undo.staged) {
+      try {
+        if (existsSync(staged.stagedPath)) {
+          renameSync(staged.stagedPath, staged.originalPath);
+        }
+      } catch {
+        failedPaths.push(staged.originalPath);
+      }
+    }
+    for (const snapshot of undo.snapshots) {
+      try {
+        writeFileAtomic(snapshot.path, snapshot.previous);
+      } catch {
+        failedPaths.push(snapshot.path);
+      }
+    }
+    return failedPaths;
   }
 
   writeMilestoneFile(milestone: Milestone): void {

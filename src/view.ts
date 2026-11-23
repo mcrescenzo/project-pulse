@@ -140,7 +140,9 @@ export async function buildRoadmapViewPayload(
       errors: check.errors,
       warnings: check.warnings,
     },
-    beads: check.beads ?? {},
+    // Null prototype (pp-f7m.29): dashboard lookups like `beads[f.id]` must yield undefined —
+    // not an inherited Object.prototype member — for legal feature ids such as 'constructor'.
+    beads: check.beads ?? Object.create(null),
   };
 }
 
