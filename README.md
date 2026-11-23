@@ -23,7 +23,7 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 
 ## Features
 
-- **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server.
+- **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server. Values are written with round-trip-verified YAML, so titles that look like numbers, booleans, or dates — or end in a colon — survive add, reload, and `pp check` byte-exact on every supported Bun (1.3+).
 - **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
 - **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
 - **Agent-ready:** token-lean `pp summary`, `--json` on every command, a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
