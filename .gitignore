@@ -21,3 +21,6 @@ Thumbs.db
 # Beads / Dolt files (added by bd init)
 *.db
 .beads/proxieddb/
+
+# Project Pulse store write-lock sidecar (local coordination state, never commit)
+.project-pulse/.store-lock.sqlite*

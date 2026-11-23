@@ -2,6 +2,24 @@ import type { BeadStatusInfo, Feature, FeatureStatus, Milestone, ValidationIssue
 import type { RoadmapViewPayload } from "../dashboard-html";
 import { ScreenBuffer, TUI_PALETTE, truncateText, type CellStyle, type PaletteColor } from "./screen";
 
+/**
+ * Hit-test z layers mirroring overlay paint order in TuiController.render():
+ * header/cards/board/graph (< HitLayer.drawerBackdrop) < drawer < picker < health < help.
+ * Each later-painted layer must out-rank every earlier one, or clicks leak through
+ * the modal into covered controls (drawer status pills, criteria toggles).
+ */
+export const HitLayer = {
+  drawerBackdrop: 55,
+  drawerPanel: 58,
+  drawerControl: 62,
+  pickerBackdrop: 63,
+  pickerOption: 64,
+  healthBackdrop: 65,
+  healthControl: 66,
+  helpBackdrop: 68,
+  helpControl: 72,
+} as const;
+
 export type TuiViewMode = "cards" | "graph" | "board";
 export type PickerKind = "milestone" | "status" | "area";
 export type GraphZoomLevel = "full" | "compact" | "overview";
@@ -1087,7 +1105,7 @@ export function renderFloatingPicker(
     y: 0,
     w: width,
     h: height,
-    zIndex: 35,
+    zIndex: HitLayer.pickerBackdrop,
   });
 
   const maxLabelLen = picker.options.reduce((m, o) => Math.max(m, o.label.length), 14);
@@ -1131,7 +1149,7 @@ export function renderFloatingPicker(
       y: rowY,
       w: w - 2,
       h: 1,
-      zIndex: 41,
+      zIndex: HitLayer.pickerOption,
       data: { kind: picker.kind, value: opt.value },
     });
   }
@@ -1152,7 +1170,7 @@ export function renderHealthOverlay(
     y: 0,
     w: width,
     h: height,
-    zIndex: 48,
+    zIndex: HitLayer.healthBackdrop,
   });
 
   const w = Math.min(width - 4, 92);
@@ -1173,7 +1191,7 @@ export function renderHealthOverlay(
     y + 1,
     "Close",
     { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "health-close", kind: "health-close", zIndex: 52 }
+    { id: "health-close", kind: "health-close", zIndex: HitLayer.healthControl }
   );
 
   const featureIds = new Set(state.payload.features.map((f) => f.id));
@@ -1215,7 +1233,7 @@ export function renderHealthOverlay(
         {
           id: `health-jump-${item.entityId}`,
           kind: "health-jump",
-          zIndex: 52,
+          zIndex: HitLayer.healthControl,
           data: item.entityId,
         }
       );

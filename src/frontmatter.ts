@@ -1,5 +1,6 @@
 import { lstatSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { Feature, Milestone, PulseConfig } from "./types";
 
 export interface ParsedMarkdownFile {
@@ -51,8 +52,51 @@ function cleanYamlOutput(rawYaml: string): string {
   return rawYaml.replace(/^(.*?:)[ \t]+$/gm, "$1").trimEnd();
 }
 
+/**
+ * True when `candidate` parses back to exactly `expected` (type-strict, so a
+ * stored "0.5" reloading as the number 0.5 fails). Key order is not
+ * re-checked here: it is guaranteed upstream by serializing the ordered
+ * store object itself.
+ */
+function isLosslessYaml(candidate: string, expected: Record<string, unknown>): boolean {
+  try {
+    return isDeepStrictEqual(Bun.YAML.parse(candidate), expected);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Serializes a store object to YAML that is verified to reload identically.
+ *
+ * Native `Bun.YAML.stringify` is preferred so unambiguous records keep their
+ * exact formatting, but its plain scalars are lossy on supported runtimes:
+ * strings ending in `:` were written unquoted before Bun 1.3.5 (reloading as
+ * mappings), and numeric-looking strings such as `0.5` are still written
+ * unquoted on Bun 1.3.9 (reloading as numbers, which made `pp check` report
+ * MISSING_MILESTONE_TITLE). Each candidate is therefore parsed back and
+ * deep-compared against the input — after cleanYamlOutput, i.e. exactly the
+ * text that would be written. On any mismatch the store falls back to
+ * `JSON.stringify(…, null, 2)`, itself a valid YAML document with readable
+ * quoted strings, verified the same way before being returned.
+ */
+function yamlForStore(orderedObject: Record<string, unknown>): string {
+  let native = "";
+  try {
+    native = cleanYamlOutput(Bun.YAML.stringify(orderedObject, null, 2));
+  } catch {
+    // Fall through to the JSON candidate below.
+  }
+  if (native && isLosslessYaml(native, orderedObject)) return native;
+  const json = cleanYamlOutput(JSON.stringify(orderedObject, null, 2));
+  if (isLosslessYaml(json, orderedObject)) return json;
+  throw new Error(
+    `Store serialization could not produce a round-trippable YAML document (keys: ${Object.keys(orderedObject).join(", ")})`
+  );
+}
+
 function serializeYamlFrontmatter(orderedObject: Record<string, unknown>, body: string): string {
-  const yaml = cleanYamlOutput(Bun.YAML.stringify(orderedObject, null, 2));
+  const yaml = yamlForStore(orderedObject);
   const trimmedBody = body.trim();
   if (!trimmedBody) {
     return `---\n${yaml}\n---\n`;
@@ -79,7 +123,7 @@ export function serializeConfig(config: PulseConfig): string {
       },
     },
   };
-  return `${cleanYamlOutput(Bun.YAML.stringify(ordered, null, 2))}\n`;
+  return `${yamlForStore(ordered)}\n`;
 }
 
 /**

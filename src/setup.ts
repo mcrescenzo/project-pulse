@@ -100,9 +100,15 @@ export function mergeAgentsMarkdown(
     };
   }
 
-  const normalized = existing.replace(/\r\n/g, "\n");
-  const startIdx = normalized.indexOf(AGENTS_BLOCK_START);
-  const endIdx = normalized.indexOf(AGENTS_BLOCK_END);
+  // Match against the original document and splice original slices directly, so every user-owned
+  // byte (CRLF endings, trailing whitespace) survives and generated text adopts the document's
+  // newline style. Re-running is byte-stable because the restyle choice depends only on the
+  // document content itself.
+  const newline = existing.includes("\r\n") ? "\r\n" : "\n";
+  const styledBlock = managedBlock.replace(/\r\n/g, "\n").replace(/\n/g, newline);
+
+  const startIdx = existing.indexOf(AGENTS_BLOCK_START);
+  const endIdx = existing.indexOf(AGENTS_BLOCK_END);
 
   if (startIdx !== -1 || endIdx !== -1) {
     if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
@@ -110,41 +116,49 @@ export function mergeAgentsMarkdown(
         `Existing AGENTS.md contains unmatched '${AGENTS_BLOCK_START}' / '${AGENTS_BLOCK_END}' markers`
       );
     }
-    const afterEnd = endIdx + AGENTS_BLOCK_END.length;
-    const next = `${normalized.slice(0, startIdx)}${managedBlock}${normalized.slice(afterEnd)}`;
+    const next =
+      existing.slice(0, startIdx) + styledBlock + existing.slice(endIdx + AGENTS_BLOCK_END.length);
     return {
-      content: next,
-      action: next === normalized ? "unchanged" : "update",
+      content: next === existing ? existing : next,
+      action: next === existing ? "unchanged" : "update",
     };
   }
 
-  // Upgrade unmarked snippet added by prior `pp init --agents-snippet` pastes without clobbering surrounding sections
-  const unmarkedHeadingRe = /^## Project Roadmap \(`project-pulse` \/ `pp`\)\n/m;
-  const headingMatch = unmarkedHeadingRe.exec(normalized);
-  if (headingMatch) {
-    const sectionStart = headingMatch.index;
-    const restAfterHeading = normalized.slice(sectionStart + headingMatch[0].length);
-    const nextSectionMatch = /^## /m.exec(restAfterHeading);
-    const sectionEnd = nextSectionMatch
-      ? sectionStart + headingMatch[0].length + nextSectionMatch.index
-      : normalized.length;
-
-    const prefix = normalized.slice(0, sectionStart).trimEnd();
-    const suffix = normalized.slice(sectionEnd).trimStart();
-    const parts = [prefix, managedBlock, suffix].filter((p) => p.length > 0);
-    const next = `${parts.join("\n\n")}\n`;
-    return {
-      content: next,
-      action: next === normalized ? "unchanged" : "update",
-    };
+  // Upgrade unmarked snippet pasted from `pp init --agents-snippet` output. Replace only the
+  // recognized generated text (its LF endings also match CRLF pastes) so following headings of
+  // any level (e.g. a top-level `# Deployment` section) and custom prose around the paste keep
+  // every user byte. If no paste matches, fall through to the append path below, which also
+  // never removes user bytes.
+  const legacySnippetRe = new RegExp(
+    `(^|\\n)${escapeRegExp(getAgentsSnippet()).replace(/\n/g, "\\r?\\n")}(?=\\r?\\n|$)`
+  );
+  const legacyMatch = legacySnippetRe.exec(existing);
+  if (legacyMatch) {
+    const next =
+      existing.slice(0, legacyMatch.index + legacyMatch[1].length) +
+      styledBlock +
+      existing.slice(legacyMatch.index + legacyMatch[0].length);
+    return { content: next, action: "update" };
   }
 
-  const base = normalized.trimEnd();
-  const next = base ? `${base}\n\n${managedBlock}\n` : `${managedBlock}\n`;
+  // Append after the document's existing trailing whitespace, adding only the newlines still
+  // needed for one blank line of separation.
+  const pad = newline.repeat(Math.max(0, 2 - trailingNewlineCount(existing)));
+  const next =
+    existing.length === 0 ? `${styledBlock}${newline}` : `${existing}${pad}${styledBlock}${newline}`;
   return {
-    content: next,
-    action: next === normalized ? "unchanged" : "update",
+    content: next === existing ? existing : next,
+    action: next === existing ? "unchanged" : "update",
   };
+}
+
+/** Counts the line terminators (`\n` or `\r\n`) at the end of `text`; each contains one `\n`. */
+function trailingNewlineCount(text: string): number {
+  return /(?:\r?\n)*$/.exec(text)![0].split("\n").length - 1;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function mergeMcpJson(

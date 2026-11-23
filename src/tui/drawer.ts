@@ -1,6 +1,6 @@
 import type { Feature, FeatureStatus } from "../types";
 import { ScreenBuffer, TUI_PALETTE, sanitizeTerminalText, truncateText, type CellStyle } from "./screen";
-import { drawPill, getStatusStyle, type Rect, type TuiState } from "./views";
+import { HitLayer, drawPill, getStatusStyle, type Rect, type TuiState } from "./views";
 
 export interface DrawerRectInfo extends Rect {
   mode: "split" | "modal";
@@ -177,7 +177,7 @@ export function renderFeatureDrawer(
       y: 0,
       w: totalW,
       h: totalH,
-      zIndex: 55,
+      zIndex: HitLayer.drawerBackdrop,
     });
   }
 
@@ -194,7 +194,7 @@ export function renderFeatureDrawer(
     y: rect.y,
     w: rect.w,
     h: rect.h,
-    zIndex: 58,
+    zIndex: HitLayer.drawerPanel,
   });
 
   // Pinned Header rows inside drawer
@@ -213,7 +213,7 @@ export function renderFeatureDrawer(
     rect.y + 1,
     "y Copy",
     { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft },
-    { id: "drawer-copy", kind: "copy-id", zIndex: 62, data: feature.id }
+    { id: "drawer-copy", kind: "copy-id", zIndex: HitLayer.drawerControl, data: feature.id }
   );
   drawPill(
     buf,
@@ -221,7 +221,7 @@ export function renderFeatureDrawer(
     rect.y + 1,
     "Close",
     { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "drawer-close", kind: "drawer-close", zIndex: 62 }
+    { id: "drawer-close", kind: "drawer-close", zIndex: HitLayer.drawerControl }
   );
 
   const metaTag = [feature.id, feature.milestone, feature.area].filter(Boolean).join(" · ");
@@ -495,7 +495,7 @@ export function renderFeatureDrawer(
 
   const maxScrollY = Math.max(0, vy - bodyRect.h);
   state.drawerScrollY = Math.max(0, Math.min(state.drawerScrollY, maxScrollY));
-  const cw = new DrawerClipWriter(buf, bodyRect, state.drawerScrollY, 62);
+  const cw = new DrawerClipWriter(buf, bodyRect, state.drawerScrollY, HitLayer.drawerControl);
   for (const op of ops) op(cw);
 
   return { maxScrollY, rect };
@@ -509,7 +509,7 @@ export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: numb
     y: 0,
     w: width,
     h: height,
-    zIndex: 68,
+    zIndex: HitLayer.helpBackdrop,
   });
 
   const w = Math.min(width - 4, 78);
@@ -530,7 +530,7 @@ export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: numb
     y + 1,
     "Close",
     { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "help-close", kind: "help-close", zIndex: 72 }
+    { id: "help-close", kind: "help-close", zIndex: HitLayer.helpControl }
   );
 
   const lines: Array<[string, string]> = [
