@@ -1,8 +1,7 @@
-import { existsSync, watch, type FSWatcher } from "node:fs";
 import type { BeadsClient } from "../beads";
-import { buildRoadmapViewPayload } from "../view";
-import { RoadmapService } from "../store";
-import type { FeatureStatus } from "../types";
+import { buildRoadmapViewPayload, startLiveWatcher, type LiveWatcherHandle } from "../view";
+import { RoadmapService, type LoadedStore } from "../store";
+import type { CheckResult, FeatureStatus } from "../types";
 import { getDrawerRect, renderFeatureDrawer, renderHelpOverlay } from "./drawer";
 import {
   clampGraphCamera,
@@ -15,7 +14,7 @@ import {
   type WaterfallLayout,
 } from "./graph";
 import { encodeOsc52Copy, NodeTerminalSession, type InputEvent, type KeyEvent, type MouseEvent, type TerminalSession } from "./input";
-import { diffBuffers, ScreenBuffer, TUI_PALETTE, type HitRegion } from "./screen";
+import { diffBuffers, ScreenBuffer, segmentText, TUI_PALETTE, type HitRegion } from "./screen";
 import {
   buildPickerOptions,
   computeFilteredData,
@@ -43,6 +42,18 @@ export interface TuiControllerOptions {
 }
 
 /**
+ * True when a key event should be typed into the note editor or search field.
+ * Accepts exactly one printable code point, including supplementary characters
+ * (emoji occupy two UTF-16 units); named keys like "up" or "enter" are rejected.
+ */
+function isPrintableTextInput(key: string): boolean {
+  if (key.length === 0 || key.length > 2) return false;
+  const cp = key.codePointAt(0)!;
+  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return false;
+  return key.length === 1 || cp >= 0x10000;
+}
+
+/**
  * Coordinates TUI state transitions, input routing, rendering, and Beads/store refreshes.
  */
 export class TuiController {
@@ -61,7 +72,7 @@ export class TuiController {
   private lastBoardCols: string[] = [];
   private lastGraphLayout: WaterfallLayout | null = null;
   private lastDrawerMaxScroll = 0;
-  private watchers: FSWatcher[] = [];
+  private liveWatch: LiveWatcherHandle | null = null;
   private watchDebounce: ReturnType<typeof setTimeout> | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
   private graphDrag: {
@@ -151,40 +162,34 @@ export class TuiController {
       clearTimeout(this.watchDebounce);
       this.watchDebounce = null;
     }
-    for (const watcher of this.watchers) {
-      try {
-        watcher.close();
-      } catch {
-        // Ignore watcher teardown errors
-      }
-    }
-    this.watchers = [];
+    // Cancels pending watch reloads and closes every underlying watcher, including resolved
+    // symlink-target watches, so no further frames or reloads run after teardown.
+    this.liveWatch?.close();
+    this.liveWatch = null;
     this.session.leave();
     this.onExit?.();
   }
 
   private startWatchers(): void {
-    if (this.watchers.length > 0) return;
-    const scheduleReload = () => {
-      if (this.stopped) return;
-      if (this.watchDebounce) clearTimeout(this.watchDebounce);
-      this.watchDebounce = setTimeout(() => {
-        this.watchDebounce = null;
-        if (!this.stopped) this.reloadSync();
-      }, 150);
-    };
-    for (const dir of [this.service.pulseDir, this.service.milestonesDir, this.service.featuresDir]) {
-      if (!existsSync(dir)) continue;
-      try {
-        const w = watch(dir, { persistent: false }, (_eventType, filename) => {
-          if (filename && String(filename).includes(".tmp.")) return;
-          scheduleReload();
-        });
-        this.watchers.push(w);
-      } catch {
-        // Non-fatal if OS watcher quota is exhausted
-      }
-    }
+    if (this.liveWatch) return;
+    this.liveWatch = startLiveWatcher({
+      paths: [
+        { path: this.service.pulseDir, type: "dir" },
+        { path: this.service.milestonesDir, type: "dir" },
+        { path: this.service.featuresDir, type: "dir" },
+        // The root roadmap file: external `pp render` must clear ROADMAP_OUT_OF_SYNC here
+        // without a manual refresh. Reloads never write it, so no feedback loop exists.
+        { path: this.service.roadmapPath, type: "file" },
+      ],
+      onEvent: () => {
+        if (this.stopped) return;
+        if (this.watchDebounce) clearTimeout(this.watchDebounce);
+        this.watchDebounce = setTimeout(() => {
+          this.watchDebounce = null;
+          if (!this.stopped) this.reloadSync();
+        }, 150);
+      },
+    });
   }
 
   async refreshBeadsAsync(): Promise<void> {
@@ -197,6 +202,11 @@ export class TuiController {
         beadsClient: this.beadsClient,
       });
       if (this.stopped || gen !== this.loadGeneration) return;
+      // Beads may have been disabled (config change or --no-beads) while the lookup was in
+      // flight; its result must not replace a snapshot for which Beads is out of scope.
+      const beadsStillWanted =
+        !this.state.noBeads && this.state.payload.config.integrations.beads.enabled;
+      if (!beadsStillWanted) return;
       this.state.payload = fullPayload;
       this.state.beadsLoading = false;
       this.render();
@@ -208,6 +218,8 @@ export class TuiController {
   }
 
   render(): ScreenBuffer {
+    // After stop() the terminal is restored; never write another frame (SIGTERM contract).
+    if (this.stopped) return this.currentBuf;
     const w = this.session.width;
     const h = this.session.height;
     const buf = new ScreenBuffer(w, h);
@@ -324,12 +336,12 @@ export class TuiController {
         return;
       }
       if (ev.key === "backspace") {
-        this.state.search = this.state.search.slice(0, -1);
+        this.state.search = segmentText(this.state.search).slice(0, -1).join("");
         this.state.cardsScrollY = 0;
         this.render();
         return;
       }
-      if (!ev.ctrl && !ev.alt && ev.key.length === 1) {
+      if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
         this.state.search += ev.key;
         this.state.cardsScrollY = 0;
         this.render();
@@ -378,7 +390,7 @@ export class TuiController {
       if (ev.key === "tab") {
         this.state.drawerFocus = this.state.drawerFocus === "criteria" ? "note" : "criteria";
         if (this.state.drawerFocus === "note") {
-          this.state.noteCursor = Array.from(
+          this.state.noteCursor = segmentText(
             this.state.noteDrafts[this.state.drawerFeatureId] ?? ""
           ).length;
         }
@@ -840,8 +852,18 @@ export class TuiController {
   }
 
   private reloadSync(options: { preserveFeedback?: boolean } = {}): void {
-    const loaded = this.service.load();
-    const fastCheck = this.service.check();
+    let loaded: LoadedStore;
+    let fastCheck: CheckResult;
+    try {
+      loaded = this.service.load();
+      fastCheck = this.service.check();
+    } catch (error) {
+      // Config can be transiently missing or malformed while a watcher or manual reload fires.
+      // Keep the last good snapshot on screen, surface the failure, and recover on repair.
+      this.handleReloadFailure(error);
+      return;
+    }
+    const hadLoadError = this.state.loadError !== null;
     const knownIds = new Set(loaded.milestones.map((m) => m.id));
     const defaultId = loaded.config.defaults.milestone;
     const milestones = [...loaded.milestones];
@@ -854,20 +876,38 @@ export class TuiController {
         description: "Features queued without a specific release milestone.",
       });
     }
+    const beadsWanted = !this.state.noBeads && loaded.config.integrations.beads.enabled;
     this.state.payload = {
       config: loaded.config,
       milestones,
       features: loaded.features,
       check: { ok: fastCheck.ok, errors: fastCheck.errors, warnings: fastCheck.warnings },
-      beads: this.state.payload.beads,
+      // Prior Beads data must not survive a snapshot where Beads is out of scope.
+      beads: beadsWanted ? this.state.payload.beads : {},
     };
+    if (beadsWanted) {
+      void this.refreshBeadsAsync();
+    } else {
+      // Advance the generation so any in-flight Beads lookup is discarded and clear loading.
+      this.loadGeneration++;
+      this.state.beadsLoading = false;
+    }
     if (!options.preserveFeedback) {
       this.state.drawerFeedback = null;
     }
-    this.render();
-    if (!this.state.noBeads && loaded.config.integrations.beads.enabled) {
-      void this.refreshBeadsAsync();
+    if (hadLoadError) {
+      this.state.loadError = null;
+      this.state.toast = { kind: "ok", message: "Recovered roadmap from disk" };
     }
+    this.render();
+  }
+
+  private handleReloadFailure(error: unknown): void {
+    const message = (error as Error).message || "Unknown reload failure";
+    this.state.loadError = message;
+    this.state.beadsLoading = false;
+    this.state.toast = { kind: "err", message: `Reload failed: ${message}` };
+    this.render();
   }
 
   private openDrawer(featureId: string): void {
@@ -889,7 +929,7 @@ export class TuiController {
 
   private focusDrawerNote(featureId: string): void {
     this.state.drawerFocus = "note";
-    this.state.noteCursor = Array.from(this.state.noteDrafts[featureId] ?? "").length;
+    this.state.noteCursor = segmentText(this.state.noteDrafts[featureId] ?? "").length;
     this.render();
   }
 
@@ -956,7 +996,7 @@ export class TuiController {
       this.submitPulseNote(featureId);
       return;
     }
-    const glyphs = Array.from(this.state.noteDrafts[featureId] ?? "");
+    const glyphs = segmentText(this.state.noteDrafts[featureId] ?? "");
     let cursor = Math.max(0, Math.min(this.state.noteCursor, glyphs.length));
     if (ev.key === "left") {
       this.state.noteCursor = Math.max(0, cursor - 1);
@@ -997,7 +1037,7 @@ export class TuiController {
       }
       return;
     }
-    if (!ev.ctrl && !ev.alt && ev.key.length === 1) {
+    if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
       glyphs.splice(cursor, 0, ev.key);
       this.state.noteDrafts[featureId] = glyphs.join("");
       this.state.noteCursor = cursor + 1;
@@ -1158,20 +1198,29 @@ export interface RunTuiOptions {
  */
 export async function runTui(rootDir: string, options: RunTuiOptions = {}): Promise<void> {
   const session = options.session ?? new NodeTerminalSession();
-  await new Promise<void>((resolveDone, rejectDone) => {
-    let controller: TuiController;
-    try {
-      controller = new TuiController({
-        rootDir,
-        noBeads: options.noBeads,
-        beadsClient: options.beadsClient,
-        session,
-        onExit: () => resolveDone(),
-      });
-      controller.start();
-    } catch (error) {
-      session.leave();
-      rejectDone(error);
-    }
-  });
+  const { promise, resolve: resolveDone, reject: rejectDone } = Promise.withResolvers<void>();
+  let controller: TuiController;
+  let offSignal: (() => void) | undefined;
+  try {
+    controller = new TuiController({
+      rootDir,
+      noBeads: options.noBeads,
+      beadsClient: options.beadsClient,
+      session,
+      onExit: () => {
+        offSignal?.();
+        resolveDone();
+      },
+    });
+    // A signal must behave like an interactive exit: cancel pending watch reloads, restore
+    // the terminal, resolve the run promise. render() is inert once stopped, so no frame is
+    // written after the terminal is restored.
+    offSignal = session.onSignal?.(() => controller.stop());
+    controller.start();
+  } catch (error) {
+    offSignal?.();
+    session.leave();
+    rejectDone(error);
+  }
+  await promise;
 }

@@ -47,6 +47,7 @@ export interface HitRegion {
 }
 
 interface Cell {
+  /** Glyph content; "" marks the invisible right half of a wide glyph. */
   ch: string;
   fg?: PaletteColor;
   bg?: PaletteColor;
@@ -55,6 +56,8 @@ interface Cell {
   underline: boolean;
   inverse: boolean;
 }
+
+const WIDE_CONT = "";
 
 /**
  * Detects terminal color capabilities from environment variables while honoring NO_COLOR.
@@ -89,19 +92,54 @@ export function sanitizeTerminalText(text: string): string {
     .replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
+const graphemeSegmenter = new Intl.Segmenter("und", { granularity: "grapheme" });
+
+/**
+ * Splits text into user-perceived grapheme clusters (emoji, ZWJ sequences, combining marks).
+ */
+export function segmentText(text: string): string[] {
+  const clusters: string[] = [];
+  for (const part of graphemeSegmenter.segment(text)) clusters.push(part.segment);
+  return clusters;
+}
+
+/**
+ * Terminal cells occupied by a single grapheme cluster (0, 1, or 2).
+ */
+export function glyphCellWidth(glyph: string): number {
+  return Math.max(0, Math.min(2, Bun.stringWidth(glyph)));
+}
+
+/**
+ * Terminal cells occupied by a string measured over its grapheme clusters.
+ */
+export function textCellWidth(text: string): number {
+  let total = 0;
+  for (const glyph of segmentText(text)) total += glyphCellWidth(glyph);
+  return total;
+}
+
 /**
  * Truncates sanitized text cleanly to fit within `maxWidth` cells.
  */
 export function truncateText(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
-  const glyphs = Array.from(sanitizeTerminalText(text));
-  if (glyphs.length <= maxWidth) {
-    return glyphs.join("");
+  const clean = sanitizeTerminalText(text);
+  const clusters = segmentText(clean);
+  let totalWidth = 0;
+  for (const glyph of clusters) totalWidth += glyphCellWidth(glyph);
+  if (totalWidth <= maxWidth) return clean;
+  if (maxWidth === 1) return "…";
+  const budget = maxWidth - 1;
+  let out = "";
+  let used = 0;
+  for (const glyph of clusters) {
+    const width = glyphCellWidth(glyph);
+    if (used + width > budget) break;
+    out += glyph;
+    used += width;
   }
-  if (maxWidth === 1) {
-    return "…";
-  }
-  return glyphs.slice(0, maxWidth - 1).join("") + "…";
+  return out + "…";
 }
 
 function makeCell(ch: string, style?: CellStyle): Cell {
@@ -200,11 +238,60 @@ export class ScreenBuffer {
     const yi = Math.floor(y);
     if (xi < 0 || yi < 0 || xi >= this.width || yi >= this.height) return;
     const clean = sanitizeTerminalText(ch);
-    const glyph = Array.from(clean)[0] ?? " ";
-    const idx = yi * this.width + xi;
+    const glyph = segmentText(clean)[0] ?? " ";
+    const width = glyphCellWidth(glyph);
+    if (width >= 2) {
+      // Never emit half a wide glyph at the row boundary.
+      if (xi + 1 >= this.width) return;
+      this.putCell(xi, yi, glyph, style);
+      this.putWideContinuation(xi + 1, yi, style);
+      return;
+    }
+    if (width === 0) {
+      const existing = this.cells[yi * this.width + xi]!;
+      // Zero-width glyph attaches to the base already occupying the cell; an
+      // isolated one occupies no cell and is skipped so cursors never drift.
+      if (existing.ch !== WIDE_CONT && existing.ch !== " ") {
+        this.putCell(xi, yi, existing.ch + glyph, style);
+      }
+      return;
+    }
+    this.putCell(xi, yi, glyph, style);
+  }
+
+  private putCell(x: number, y: number, ch: string, style?: CellStyle): void {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    const idx = y * this.width + x;
+    const existing = this.cells[idx];
+    // Overwriting the right half of a wide glyph orphans its base; blank it.
+    if (existing && existing.ch === WIDE_CONT && x > 0) {
+      const left = this.cells[idx - 1]!;
+      if (left.ch !== WIDE_CONT) {
+        this.cells[idx - 1] = { ...left, ch: " " };
+      }
+    }
+    this.cells[idx] = {
+      ch,
+      fg: style?.fg,
+      bg: style?.bg !== undefined ? style.bg : existing?.bg,
+      bold: Boolean(style?.bold),
+      dim: Boolean(style?.dim),
+      underline: Boolean(style?.underline),
+      inverse: Boolean(style?.inverse),
+    };
+    // Overwriting a wide base leaves a stale continuation cell behind; blank it.
+    const right = x + 1 < this.width ? this.cells[idx + 1] : undefined;
+    if (right && right.ch === WIDE_CONT) {
+      this.cells[idx + 1] = { ...right, ch: " " };
+    }
+  }
+
+  private putWideContinuation(x: number, y: number, style?: CellStyle): void {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    const idx = y * this.width + x;
     const existing = this.cells[idx];
     this.cells[idx] = {
-      ch: glyph,
+      ch: WIDE_CONT,
       fg: style?.fg,
       bg: style?.bg !== undefined ? style.bg : existing?.bg,
       bold: Boolean(style?.bold),
@@ -221,14 +308,48 @@ export class ScreenBuffer {
     const available = Math.min(maxWidth, this.width - Math.max(0, xi));
     if (available <= 0) return 0;
 
-    const fullText = xi < 0 ? Array.from(sanitizeTerminalText(text)).slice(-xi).join("") : text;
+    const clean = sanitizeTerminalText(text);
     const startX = Math.max(0, xi);
-    const clipped = truncateText(fullText, startX < this.width ? Math.min(maxWidth, this.width - startX) : 0);
-    const glyphs = Array.from(clipped);
-    for (let i = 0; i < glyphs.length; i++) {
-      this.put(startX + i, yi, glyphs[i]!, style);
+    let fullText = clean;
+    if (xi < 0) {
+      // Clip by terminal cells: whole clusters whose cells start left of x=0 are
+      // dropped, so a wide glyph straddling the edge is never half-rendered.
+      fullText = "";
+      let offset = 0;
+      for (const glyph of segmentText(clean)) {
+        if (offset >= -xi) fullText += glyph;
+        offset += glyphCellWidth(glyph);
+      }
     }
-    return glyphs.length;
+    const clipped = truncateText(fullText, available);
+    const glyphs = segmentText(clipped);
+    let cx = startX;
+    let lastBaseX = -1;
+    for (const glyph of glyphs) {
+      const width = glyphCellWidth(glyph);
+      if (width <= 0) {
+        // Zero-width cluster: attach to the previous cell on this row; an
+        // isolated one is dropped so logical and physical cursors stay in step.
+        if (lastBaseX >= 0) {
+          const idx = yi * this.width + lastBaseX;
+          const base = this.cells[idx]!;
+          this.cells[idx] = { ...base, ch: base.ch + glyph };
+        }
+        continue;
+      }
+      if (cx + width > this.width || cx + width - startX > available) break;
+      if (width === 1) {
+        this.putCell(cx, yi, glyph, style);
+        lastBaseX = cx;
+        cx += 1;
+      } else {
+        this.putCell(cx, yi, glyph, style);
+        this.putWideContinuation(cx + 1, yi, style);
+        lastBaseX = cx;
+        cx += 2;
+      }
+    }
+    return cx - startX;
   }
 
   fillRect(x: number, y: number, w: number, h: number, style?: CellStyle, ch = " "): void {
@@ -343,6 +464,11 @@ export function diffBuffers(prev: ScreenBuffer | null, next: ScreenBuffer, color
   for (let y = 0; y < next.height; y++) {
     for (let x = 0; x < next.width; x++) {
       const nextCell = next.getCell(x, y)!;
+      if (nextCell.ch === WIDE_CONT) {
+        // Right half of a wide glyph: already covered by its base cell's output.
+        if (curY === y && curX === x) curX = x + 1;
+        continue;
+      }
       if (!fullRedraw) {
         const prevCell = prev.getCell(x, y)!;
         if (sameCell(prevCell, nextCell)) continue;

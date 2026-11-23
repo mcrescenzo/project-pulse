@@ -81,6 +81,8 @@ export interface TuiState {
   graphCamera: GraphCameraState;
   beadsLoading: boolean;
   liveWatchActive: boolean;
+  /** Message from the most recent failed disk reload; null once a reload succeeds again. */
+  loadError: string | null;
   toast: TuiFeedback | null;
   drawerFeedback: TuiFeedback | null;
   noBeads: boolean;
@@ -161,6 +163,7 @@ export function createInitialTuiState(
     },
     beadsLoading: Boolean(opts.beadsLoading),
     liveWatchActive: Boolean(opts.liveWatchActive),
+    loadError: null,
     toast: null,
     drawerFeedback: null,
     noBeads: Boolean(opts.noBeads),
@@ -1200,18 +1203,53 @@ export function renderHealthOverlay(
     ...state.payload.check.warnings.map((item) => ({ level: "warning" as const, item })),
   ];
 
+  const firstRowY = y + 3;
+  if (state.loadError) {
+    buf.writeText(x + 3, firstRowY, `Last reload failed: ${state.loadError}`, w - 6, {
+      fg: TUI_PALETTE.red,
+    });
+  }
+
   if (issues.length === 0) {
-    buf.writeText(
-      x + 3,
-      y + 3,
-      "All schema, DAG, ROADMAP.md sync, and Beads checks passed with 0 errors and 0 warnings.",
-      w - 6,
-      { fg: TUI_PALETTE.green }
-    );
+    const beadsWanted = !state.noBeads && state.payload.config.integrations.beads.enabled;
+    const rowY = firstRowY + (state.loadError ? 2 : 0);
+    if (!beadsWanted) {
+      buf.writeText(
+        x + 3,
+        rowY,
+        "Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).",
+        w - 6,
+        { fg: TUI_PALETTE.green }
+      );
+      buf.writeText(
+        x + 3,
+        rowY + 1,
+        "Beads checks skipped (--no-beads or integrations.beads.enabled=false).",
+        w - 6,
+        { fg: TUI_PALETTE.amber }
+      );
+    } else if (state.beadsLoading) {
+      buf.writeText(
+        x + 3,
+        rowY,
+        "Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).",
+        w - 6,
+        { fg: TUI_PALETTE.green }
+      );
+      buf.writeText(x + 3, rowY + 1, "Beads checks pending…", w - 6, { fg: TUI_PALETTE.amber });
+    } else {
+      buf.writeText(
+        x + 3,
+        rowY,
+        "All schema, DAG, ROADMAP.md sync, and Beads checks passed (0 errors, 0 warnings).",
+        w - 6,
+        { fg: TUI_PALETTE.green }
+      );
+    }
     return;
   }
 
-  let rowY = y + 3;
+  let rowY = firstRowY + (state.loadError ? 2 : 0);
   for (let i = 0; i < issues.length && rowY < y + h - 2; i++) {
     const { level, item } = issues[i]!;
     const st = level === "error"

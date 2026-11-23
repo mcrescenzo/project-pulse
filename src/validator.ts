@@ -244,12 +244,18 @@ export function validateStore(input: ValidateStoreInput): ValidationIssue[] {
     });
   }
 
-  if (checkRoadmapSync && (currentRoadmapMd === null || currentRoadmapMd !== expectedRoadmapMd)) {
-    issues.push({
-      level: "error",
-      code: "ROADMAP_OUT_OF_SYNC",
-      message: "ROADMAP.md is missing or out of sync with .project-pulse/; run 'pp render'",
-    });
+  if (checkRoadmapSync) {
+    // Compare EOL-insensitively (pp-f7m.28): a Git checkout configured for CRLF converts the
+    // generated LF file on disk, so only substantive content differences are out of sync.
+    const currentNormalized =
+      currentRoadmapMd === null ? null : currentRoadmapMd.replace(/\r\n/g, "\n");
+    if (currentNormalized === null || currentNormalized !== expectedRoadmapMd) {
+      issues.push({
+        level: "error",
+        code: "ROADMAP_OUT_OF_SYNC",
+        message: "ROADMAP.md is missing or out of sync with .project-pulse/; run 'pp render'",
+      });
+    }
   }
 
   return issues;

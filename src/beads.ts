@@ -216,7 +216,9 @@ export function evaluateBeadsDrift(
   let unavailableNoted = false;
 
   for (const feature of features) {
-    const infos = resolvedMap[feature.id] ?? [];
+    // Own-key lookup (pp-f7m.29): a plain-object index keyed by feature id must never resolve a
+    // legal id like 'constructor' or 'toString' to an inherited Object.prototype member.
+    const infos = Object.hasOwn(resolvedMap, feature.id) ? resolvedMap[feature.id] : [];
     if (infos.length === 0) continue;
 
     for (const info of infos) {

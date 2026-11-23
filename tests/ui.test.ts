@@ -314,4 +314,344 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await context.close();
     }
   }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("completing a deferred stale roadmap read cannot restore old data over a newer snapshot", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Stale Read App", summary: "Old responses must not clobber fresh data." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "stale-a",
+      title: "Stale Read Target",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      const staleHeld = Promise.withResolvers<void>();
+      const staleReleaseGate = Promise.withResolvers<void>();
+      let roadmapRequests = 0;
+      await page.route("**/api/roadmap", async (route) => {
+        roadmapRequests += 1;
+        if (roadmapRequests === 1) {
+          // Capture a pre-edit snapshot and hold it in flight well past newer reads.
+          const stale = await route.fetch();
+          staleHeld.resolve();
+          await staleReleaseGate.promise;
+          await route.fulfill({ response: stale });
+          return;
+        }
+        const fresh = await route.fetch();
+        await route.fulfill({ response: fresh });
+      });
+
+      await page.goto(handle.openUrl, { waitUntil: "domcontentloaded" });
+      await staleHeld.promise;
+
+      // A newer read (triggered by the live reload event) must win while the first stays in flight.
+      svc.addFeatureNote("stale-a", "Second read wins");
+      await page.waitForFunction(
+        () => (document.body.textContent || "").includes("Second read wins"),
+        null,
+        { timeout: 15000 }
+      );
+
+      // Only now does the old in-flight read complete; it must be discarded, not republished.
+      const staleResponse = page.waitForResponse((response) => response.url().includes("/api/roadmap"));
+      staleReleaseGate.resolve();
+      await staleResponse;
+      // Observe a bounded window in which a republished stale payload would drop the newer note.
+      await page
+        .waitForFunction(
+          () => !(document.body.textContent || "").includes("Second read wins"),
+          null,
+          { timeout: 1500 }
+        )
+        .then(
+          () => {
+            throw new Error("Stale read replaced the newer snapshot");
+          },
+          () => undefined
+        );
+      expect(
+        await page.evaluate(() => (document.body.textContent || "").includes("Second read wins"))
+      ).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("offline edit followed by SSE reconnect shows the new state without additional mutation", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Reconnect App", summary: "Missed edits surface on reconnect." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "recon-a",
+      title: "Reconnect Target",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+
+    const accessToken = "reconnect-fixture-token-0123456789";
+    handle = startViewServer(tempDir, { port: 0, accessToken });
+    const serverPort = handle.port;
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
+
+      // Baseline live edit proves the event stream is connected before it is severed.
+      svc.addFeatureNote("recon-a", "Baseline online note");
+      await page.waitForFunction(
+        () => (document.body.textContent || "").includes("Baseline online note"),
+        null,
+        { timeout: 15000 }
+      );
+
+      // Controlled disconnect: stopping the server closes the established SSE stream client-side.
+      handle.stop();
+      handle = null;
+      await page.waitForFunction(
+        () => (document.getElementById("live-badge")?.textContent || "").includes("Reconnecting"),
+        null,
+        { timeout: 15000 }
+      );
+
+      // Edited while disconnected: the SSE reload event is missed entirely.
+      svc.addFeatureNote("recon-a", "Offline edit appears on reconnect");
+
+      // Restart on the same port and token so the session cookie stays valid; the page itself
+      // is never reloaded or interacted with from here on.
+      handle = startViewServer(tempDir, { port: serverPort, accessToken });
+      await page.waitForFunction(
+        () => (document.body.textContent || "").includes("Offline edit appears on reconnect"),
+        null,
+        { timeout: 20000 }
+      );
+      expect(
+        await page.evaluate(() => (document.getElementById("live-badge")?.textContent || "").includes("Live"))
+      ).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("failed roadmap loads show safe server diagnostics and clear once the current snapshot loads", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Diagnostics App", summary: "Server failures stay visible and safe." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "diag-a",
+      title: "Diagnostics Target",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      const failRoadmap = () =>
+        page.route("**/api/roadmap", (route) =>
+          route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ ok: false, error: "PP-DIAG store read failed [redacted]" }),
+          })
+        );
+
+      // Initial load failure surfaces the server-supplied redacted error, not a generic client string.
+      await failRoadmap();
+      await page.goto(handle.openUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById("load-status");
+          return !!el && !el.hidden && (el.textContent || "").includes("PP-DIAG store read failed [redacted]");
+        },
+        null,
+        { timeout: 15000 }
+      );
+
+      // A successful load of the current snapshot clears the diagnostics.
+      await page.unroute("**/api/roadmap");
+      await page.reload({ waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="diag-a"]');
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById("load-status");
+          return !!el && el.hidden && (el.textContent || "") === "";
+        },
+        null,
+        { timeout: 15000 }
+      );
+
+      // Live-reload failure keeps the last good data on screen and shows diagnostics again.
+      await failRoadmap();
+      svc.addFeatureNote("diag-a", "Diag note while failing");
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById("load-status");
+          return !!el && !el.hidden && (el.textContent || "").includes("PP-DIAG store read failed [redacted]");
+        },
+        null,
+        { timeout: 15000 }
+      );
+      expect(await page.locator('.card[data-feature-id="diag-a"]').count()).toBe(1);
+
+      // Recovery renders the current snapshot and clears the banner.
+      await page.unroute("**/api/roadmap");
+      svc.addFeatureNote("diag-a", "Diag note after recovery");
+      await page.waitForFunction(
+        () => (document.body.textContent || "").includes("Diag note after recovery"),
+        null,
+        { timeout: 15000 }
+      );
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById("load-status");
+          return !!el && el.hidden;
+        },
+        null,
+        { timeout: 15000 }
+      );
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("drawer drafts and save feedback stay scoped when jumping between features", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Draft Scope App", summary: "Drafts and feedback follow their own feature." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "jump-b",
+      title: "Dependency B",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+    svc.addFeature({
+      id: "jump-a",
+      title: "Feature A",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+      depends_on: ["jump-b"],
+    });
+    svc.addFeature({
+      id: "constructor",
+      title: "Prototype Key Feature",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="jump-a"]');
+
+      // Draft in A, then jump to dependency B: B must not inherit A's draft.
+      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.waitForSelector("#drawer-backdrop.open");
+      expect(await page.locator("#drawer-title").textContent()).toBe("Feature A");
+      await page.locator("#drawer-note-input").fill("Draft for A");
+      await page.locator('.dep-chip[data-jump="jump-b"]').click();
+      await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Dependency B");
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("");
+
+      // A retains its draft when the user comes back.
+      await page.locator("#drawer-note-input").fill("Draft for B");
+      await page.locator("#drawer-close").click();
+      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Feature A");
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("Draft for A");
+
+      // Submit A's note with the save response deferred.
+      const pulseGate = Promise.withResolvers<void>();
+      const pulseHeld = Promise.withResolvers<void>();
+      await page.route("**/api/features/jump-a/pulse", async (route) => {
+        const res = await route.fetch();
+        pulseHeld.resolve();
+        await pulseGate.promise;
+        await route.fulfill({ response: res });
+      });
+
+      await page.locator("#drawer-note-input").fill("Late note for A");
+      await page.locator("#drawer-note-submit").click();
+      await pulseHeld.promise;
+
+      // While the old save is still deferred, a newer A draft begins; its resolution must not discard it.
+      await page.locator("#drawer-note-input").fill("Newer draft for A");
+
+      // Jump to B while A's save response is still deferred; give B its own draft.
+      await page.locator('.dep-chip[data-jump="jump-b"]').click();
+      await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Dependency B");
+      await page.locator("#drawer-note-input").fill("Draft for B after jump");
+
+      pulseGate.resolve();
+      await page.waitForFunction(
+        () => (document.body.textContent || "").includes("Late note for A"),
+        null,
+        { timeout: 15000 }
+      );
+      // A's late save response cannot change B's draft or B's feedback.
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("Draft for B after jump");
+      expect(await page.locator("#drawer-feedback").textContent()).toBe("");
+
+      // The note landed for A, and A (not B) owns the persistent "Saved" feedback and newer draft.
+      const savedA = svc.load().features.find((f) => f.id === "jump-a");
+      expect(savedA?.updates.some((u) => u.note === "Late note for A")).toBe(true);
+      await page.locator("#drawer-close").click();
+      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Feature A");
+      expect(await page.locator("#drawer-feedback").textContent()).toContain("Saved");
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("Newer draft for A");
+
+      // Prototype-colliding IDs dispatch and render through null-prototype draft/feedback maps.
+      await page.locator("#drawer-close").click();
+      await page.locator('.card[data-feature-id="constructor"]').click();
+      await page.waitForFunction(
+        () => document.getElementById("drawer-title")?.textContent === "Prototype Key Feature"
+      );
+      // An inherited-key read would leak Function garbage into the input; own-key dispatch keeps it empty.
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("");
+      await page.locator("#drawer-note-input").fill("Draft for constructor");
+      await page.locator("#drawer-close").click();
+      await page.locator('.card[data-feature-id="constructor"]').click();
+      await page.waitForFunction(
+        () => document.getElementById("drawer-title")?.textContent === "Prototype Key Feature"
+      );
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("Draft for constructor");
+
+      // Real dispatch through the feedback map: submit and observe per-feature "Saved".
+      await page.locator("#drawer-note-input").fill("Prototype note");
+      await page.locator("#drawer-note-submit").click();
+      await page.waitForFunction(
+        () => (document.getElementById("drawer-feedback")?.textContent || "") === "Saved",
+        null,
+        { timeout: 15000 }
+      );
+      const savedCtor = svc.load().features.find((f) => f.id === "constructor");
+      expect(savedCtor?.updates.some((u) => u.note === "Prototype note")).toBe(true);
+      expect(await page.locator("#drawer-note-input").inputValue()).toBe("");
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
 });
