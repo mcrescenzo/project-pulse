@@ -72,6 +72,8 @@ export class TuiController {
   private lastBoardCols: string[] = [];
   private lastGraphLayout: WaterfallLayout | null = null;
   private lastDrawerMaxScroll = 0;
+  /** One-shot: next frame scrolls the drawer so the focused note input is visible. */
+  private noteRevealPending = false;
   private liveWatch: LiveWatcherHandle | null = null;
   private watchDebounce: ReturnType<typeof setTimeout> | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
@@ -255,7 +257,10 @@ export class TuiController {
         : [];
     }
 
-    const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state);
+    const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state, {
+      revealNote: this.noteRevealPending,
+    });
+    this.noteRevealPending = false;
     this.lastDrawerMaxScroll = drawerResult ? drawerResult.maxScrollY : 0;
     renderFloatingPicker(buf, w, h, this.state);
     renderHealthOverlay(buf, w, h, this.state);
@@ -388,12 +393,11 @@ export class TuiController {
         return;
       }
       if (ev.key === "tab") {
-        this.state.drawerFocus = this.state.drawerFocus === "criteria" ? "note" : "criteria";
-        if (this.state.drawerFocus === "note") {
-          this.state.noteCursor = segmentText(
-            this.state.noteDrafts[this.state.drawerFeatureId] ?? ""
-          ).length;
+        if (this.state.drawerFocus === "criteria") {
+          this.focusDrawerNote(this.state.drawerFeatureId);
+          return;
         }
+        this.state.drawerFocus = "criteria";
         this.render();
         return;
       }
@@ -930,6 +934,8 @@ export class TuiController {
   private focusDrawerNote(featureId: string): void {
     this.state.drawerFocus = "note";
     this.state.noteCursor = segmentText(this.state.noteDrafts[featureId] ?? "").length;
+    // Reveal the inline input on short panes during the next frame.
+    this.noteRevealPending = true;
     this.render();
   }
 

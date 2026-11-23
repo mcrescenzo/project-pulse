@@ -394,11 +394,13 @@ export class NodeTerminalSession implements TerminalSession {
   }
 
   get width(): number {
-    return Math.max(20, process.stdout.columns || 80);
+    // Report the actual pane: inflated minimums (20x10) made the frame larger
+    // than the real terminal, so diff output wrote past the last row/column.
+    return Math.max(1, process.stdout.columns || 80);
   }
 
   get height(): number {
-    return Math.max(10, process.stdout.rows || 24);
+    return Math.max(1, process.stdout.rows || 24);
   }
 
   private emitInput(ev: InputEvent): void {

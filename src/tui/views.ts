@@ -1,6 +1,6 @@
 import type { BeadStatusInfo, Feature, FeatureStatus, Milestone, ValidationIssue } from "../types";
 import type { RoadmapViewPayload } from "../dashboard-html";
-import { ScreenBuffer, TUI_PALETTE, truncateText, type CellStyle, type PaletteColor } from "./screen";
+import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, type CellStyle, type PaletteColor } from "./screen";
 
 /**
  * Hit-test z layers mirroring overlay paint order in TuiController.render():
@@ -876,11 +876,21 @@ export function renderCardsView(
           }
 
           const areaText = f.area ?? "";
-          cw.writeText(cx + 2, cy + 2, f.id, Math.max(4, innerW - areaText.length - 1), {
+          // The right-aligned area label stays inside its own card: measured in
+          // terminal cells, capped to the space left of the feature ID, and
+          // ellipsis-truncated so it can never paint into adjacent cards. The
+          // whole card remains the click target either way.
+          const cardLeft = cx + 2;
+          const cardRight = cx + Math.max(2, cwActual - 2);
+          const areaW = textCellWidth(areaText);
+          const areaAvail = Math.max(0, Math.min(areaW, cardRight - cardLeft - 5));
+          const areaX = cardRight - areaAvail;
+          const idMax = Math.max(1, (areaAvail > 0 ? areaX - 1 : cardRight) - cardLeft);
+          cw.writeText(cardLeft, cy + 2, f.id, idMax, {
             fg: TUI_PALETTE.muted,
           });
-          if (areaText) {
-            cw.writeText(cx + cwActual - 2 - areaText.length, cy + 2, areaText, areaText.length, {
+          if (areaAvail > 0) {
+            cw.writeText(areaX, cy + 2, truncateText(areaText, areaAvail), areaAvail, {
               fg: TUI_PALETTE.slate,
             });
           }

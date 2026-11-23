@@ -11,17 +11,25 @@ export interface DrawerRectInfo extends Rect {
  */
 export function getDrawerRect(totalW: number, totalH: number, topY: number): DrawerRectInfo {
   if (totalW >= 120) {
-    const w = Math.min(64, Math.max(48, Math.floor(totalW * 0.42)));
-    return {
-      mode: "split",
-      x: totalW - w,
-      y: topY,
-      w,
-      h: Math.max(8, totalH - topY - 1),
-    };
+    const availH = totalH - topY - 1;
+    // A split pane needs real vertical space (frame + pinned header + at least
+    // one body row); a wide but short terminal falls back to the centered
+    // modal, which uses the full pane height and keeps body content usable.
+    if (availH >= 6) {
+      const w = Math.min(64, Math.max(48, Math.floor(totalW * 0.42)));
+      return {
+        mode: "split",
+        x: totalW - w,
+        y: topY,
+        w,
+        h: availH,
+      };
+    }
   }
-  const w = Math.max(36, Math.min(totalW - 4, 72));
-  const h = Math.max(14, totalH - 4);
+  // The modal shrinks on small panes rather than forcing 36x14: it must always
+  // fit inside the terminal with a margin, footer row included.
+  const w = Math.min(Math.max(36, Math.min(totalW - 4, 72)), Math.max(2, totalW - 2));
+  const h = Math.min(Math.max(14, totalH - 4), Math.max(2, totalH - 2));
   return {
     mode: "modal",
     x: Math.max(1, Math.floor((totalW - w) / 2)),
@@ -44,10 +52,7 @@ function wrapText(text: string, width: number): string[] {
       if (wLen <= safeW) {
         line = w;
       } else {
-        const glyphs = Array.from(w);
-        for (let i = 0; i < glyphs.length; i += safeW) {
-          lines.push(glyphs.slice(i, i + safeW).join(""));
-        }
+        lines.push(...hardWrapWord(w, safeW));
       }
     } else if (textCellWidth(line) + 1 + wLen <= safeW) {
       line += " " + w;
@@ -56,13 +61,32 @@ function wrapText(text: string, width: number): string[] {
       if (wLen <= safeW) {
         line = w;
       } else {
-        const glyphs = Array.from(w);
-        for (let i = 0; i < glyphs.length; i += safeW) {
-          lines.push(glyphs.slice(i, i + safeW).join(""));
-        }
+        lines.push(...hardWrapWord(w, safeW));
         line = "";
       }
     }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * Hard-wraps one over-wide word on cell boundaries so wide and combining
+ * glyphs are never split across rows.
+ */
+function hardWrapWord(word: string, safeW: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  let lineW = 0;
+  for (const glyph of segmentText(word)) {
+    const gw = glyphCellWidth(glyph);
+    if (line && lineW + gw > safeW) {
+      lines.push(line);
+      line = "";
+      lineW = 0;
+    }
+    line += glyph;
+    lineW += gw;
   }
   if (line) lines.push(line);
   return lines;
@@ -112,21 +136,28 @@ class DrawerClipWriter {
     const clean = ` ${label} `;
     const len = textCellWidth(clean);
     const sy = this.toScreenY(vy);
-    if (this.isVisible(sy) && vx >= this.clip.x && vx + len <= this.clip.x + this.clip.w) {
-      this.buf.fillRect(vx, sy, len, 1, style);
-      this.buf.writeText(vx, sy, clean, len, style);
-      if (hit) {
-        this.buf.addHitRegion({
-          id: hit.id,
-          kind: hit.kind,
-          x: vx,
-          y: sy,
-          w: len,
-          h: 1,
-          zIndex: this.zIndex,
-          data: hit.data,
-        });
-      }
+    if (!this.isVisible(sy)) return len;
+    const x0 = Math.max(this.clip.x, vx);
+    const avail = Math.min(len, this.clip.x + this.clip.w - x0);
+    if (avail <= 0) return len;
+    // Truncate to the visible cells so an over-wide chip or pill renders inside
+    // the drawer (with an ellipsis) instead of disappearing entirely; the full
+    // visible pill stays one click target.
+    const shown = truncateText(clean, avail);
+    const shownW = Math.min(textCellWidth(shown), avail);
+    this.buf.fillRect(x0, sy, shownW, 1, style);
+    this.buf.writeText(x0, sy, shown, shownW, style);
+    if (hit) {
+      this.buf.addHitRegion({
+        id: hit.id,
+        kind: hit.kind,
+        x: x0,
+        y: sy,
+        w: shownW,
+        h: 1,
+        zIndex: this.zIndex,
+        data: hit.data,
+      });
     }
     return len;
   }
@@ -159,7 +190,8 @@ export function renderFeatureDrawer(
   totalW: number,
   totalH: number,
   topY: number,
-  state: TuiState
+  state: TuiState,
+  opts?: { revealNote?: boolean }
 ): { maxScrollY: number; rect: DrawerRectInfo } | null {
   if (!state.drawerFeatureId) return null;
   const feature: Feature | undefined = state.payload.features.find(
@@ -199,42 +231,50 @@ export function renderFeatureDrawer(
 
   // Pinned Header rows inside drawer
   const innerX = rect.x + 2;
-  const innerW = Math.max(16, rect.w - 4);
+  const innerW = Math.max(2, rect.w - 4);
   const copyBtnW = 8;
   const closeBtnW = 7;
-  const titleMax = Math.max(8, innerW - copyBtnW - closeBtnW - 2);
-  buf.writeText(innerX, rect.y + 1, feature.title, titleMax, {
-    fg: TUI_PALETTE.text,
-    bold: true,
-  });
-  drawPill(
-    buf,
-    rect.x + rect.w - 2 - closeBtnW - copyBtnW - 1,
-    rect.y + 1,
-    "y Copy",
-    { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft },
-    { id: "drawer-copy", kind: "copy-id", zIndex: HitLayer.drawerControl, data: feature.id }
-  );
-  drawPill(
-    buf,
-    rect.x + rect.w - 2 - closeBtnW,
-    rect.y + 1,
-    "Close",
-    { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "drawer-close", kind: "drawer-close", zIndex: HitLayer.drawerControl }
-  );
+  const titleMax = Math.min(innerW, Math.max(8, innerW - copyBtnW - closeBtnW - 2));
+  // On panes too short for the full frame, pinned rows never overwrite the box
+  // border: title needs an interior row, meta a second, divider a third.
+  if (rect.h > 2) {
+    buf.writeText(innerX, rect.y + 1, feature.title, titleMax, {
+      fg: TUI_PALETTE.text,
+      bold: true,
+    });
+    drawPill(
+      buf,
+      rect.x + rect.w - 2 - closeBtnW - copyBtnW - 1,
+      rect.y + 1,
+      "y Copy",
+      { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft },
+      { id: "drawer-copy", kind: "copy-id", zIndex: HitLayer.drawerControl, data: feature.id }
+    );
+    drawPill(
+      buf,
+      rect.x + rect.w - 2 - closeBtnW,
+      rect.y + 1,
+      "Close",
+      { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
+      { id: "drawer-close", kind: "drawer-close", zIndex: HitLayer.drawerControl }
+    );
+  }
 
   const metaTag = [feature.id, feature.milestone, feature.area].filter(Boolean).join(" · ");
-  buf.writeText(innerX, rect.y + 2, metaTag, innerW, { fg: TUI_PALETTE.muted });
-  for (let i = rect.x + 1; i < rect.x + rect.w - 1; i++) {
-    buf.put(i, rect.y + 3, "─", { fg: TUI_PALETTE.border });
+  if (rect.h > 3) {
+    buf.writeText(innerX, rect.y + 2, metaTag, innerW, { fg: TUI_PALETTE.muted });
+  }
+  if (rect.h > 4) {
+    for (let i = rect.x + 1; i < rect.x + rect.w - 1; i++) {
+      buf.put(i, rect.y + 3, "─", { fg: TUI_PALETTE.border });
+    }
   }
 
   const bodyRect: Rect = {
     x: rect.x + 1,
     y: rect.y + 4,
     w: rect.w - 2,
-    h: Math.max(4, rect.h - 5),
+    h: Math.max(0, rect.h - 5),
   };
 
   const ops: Array<(w: DrawerClipWriter) => void> = [];
@@ -270,17 +310,17 @@ export function renderFeatureDrawer(
   let sx = innerX;
   let sy = vy;
   for (const s of statuses) {
-    const pillLen = s.length + 4; // " ● status "
-    if (sx + pillLen > innerX + innerW) {
+    const active = feature.status === s;
+    const st = getStatusStyle(s);
+    const label = active ? `${st.icon} ${s}` : s;
+    // Measure in terminal cells (multi-cell icons) so pills cannot overlap.
+    const pillW = textCellWidth(` ${label} `);
+    if (sx > innerX && sx + pillW > innerX + innerW) {
       sx = innerX;
       sy += 1;
     }
     const px = sx;
     const py = sy;
-    const active = feature.status === s;
-    const st = getStatusStyle(s);
-    const label = active ? `${st.icon} ${s}` : s;
-    const usedLen = label.length + 2;
     ops.push((cw) => {
       cw.pill(
         px,
@@ -292,7 +332,7 @@ export function renderFeatureDrawer(
         { id: `drawer-status-${s}`, kind: "drawer-status", data: s }
       );
     });
-    sx += usedLen + 1;
+    sx += pillW + 1;
   }
   vy = sy + 2;
 
@@ -320,7 +360,7 @@ export function renderFeatureDrawer(
     let dy = vy;
     for (const dep of feature.depends_on) {
       const chipLabel = `→ ${dep}`;
-      const chipW = chipLabel.length + 2;
+      const chipW = textCellWidth(chipLabel) + 2;
       if (dx > innerX && dx + chipW > innerX + innerW) {
         dx = innerX;
         dy += 1;
@@ -511,6 +551,15 @@ export function renderFeatureDrawer(
   }
 
   const maxScrollY = Math.max(0, vy - bodyRect.h);
+  // Focusing the inline note input reveals it on short panes: scroll so the
+  // input row is the last visible body row (its header stays visible whenever
+  // the body shows 2+ rows). One-shot — later frames keep the user's scroll.
+  if (opts?.revealNote && state.drawerFocus === "note" && bodyRect.h > 0) {
+    const visibleBottom = state.drawerScrollY + bodyRect.h;
+    if (noteRowY >= visibleBottom || noteRowY < state.drawerScrollY) {
+      state.drawerScrollY = Math.max(0, Math.min(maxScrollY, noteRowY - bodyRect.h + 1));
+    }
+  }
   state.drawerScrollY = Math.max(0, Math.min(state.drawerScrollY, maxScrollY));
   const cw = new DrawerClipWriter(buf, bodyRect, state.drawerScrollY, HitLayer.drawerControl);
   for (const op of ops) op(cw);
