@@ -1,7 +1,10 @@
 name: Release checks
 
-# The shared gate for every integration path: PRs/pushes (ci.yml) and tag-driven releases
-# (publish.yml) run these exact jobs, so a tag run can never bypass the pack-and-test checks.
+# The shared gate for release runs: publish.yml calls this workflow on every tagged release, so a
+# tag can never bypass the pack-and-test checks. PR CI (.github/workflows/ci.yml) keeps its own
+# standalone jobs with byte-exact names because branch protection requires the status context
+# "Typecheck, test & roadmap check" verbatim, and reusable-workflow job contexts are prefixed
+# with the caller's name.
 on:
   workflow_call:
 
