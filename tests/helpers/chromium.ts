@@ -40,4 +40,4 @@ export function resolveChromiumExecutable(): string | null {
 }
 
 /** Per-test timeout for real-browser tests: cold Chrome launches on CI runners can exceed Bun's 5s default. */
-export const BROWSER_TEST_TIMEOUT_MS = 30_000;
+export const BROWSER_TEST_TIMEOUT_MS = 60_000;
