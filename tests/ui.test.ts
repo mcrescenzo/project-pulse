@@ -654,4 +654,220 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await context.close();
     }
   }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("drawer survives drag-out to backdrop, closes on genuine backdrop press, and Escape dismisses the foremost surface first", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Modal Drawer App", summary: "Drawer layering and Escape focus restoration." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "dep-root",
+      title: "Dependency Root",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+    svc.addFeature({
+      id: "dep-child",
+      title: "Dependent Child",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+      depends_on: ["dep-root"],
+    });
+    // Persisted invalidity is introduced outside the service (mutations reject invalid
+    // candidates): deleting the dependency's feature file yields a MISSING_DEPENDENCY
+    // issue whose entityId targets 'dep-child', so the health panel offers an Inspect
+    // chip that opens the drawer over the panel.
+    rmSync(join(tempDir, ".project-pulse", "features", "dep-root.md"));
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="dep-child"]');
+
+      // Open the health panel, then its Inspect chip: the drawer overlays the panel.
+      await page.locator("#health-badge").click();
+      await page.waitForSelector("#health-panel:not([hidden])");
+      const inspectChip = page.locator('[data-health-jump="dep-child"]');
+      await inspectChip.click();
+      await page.waitForSelector("#drawer-backdrop.open");
+      expect(await page.locator("#drawer-title").textContent()).toBe("Dependent Child");
+
+      // Escape dismisses the foremost surface (drawer), keeping the panel open beneath,
+      // and restores focus to the trigger that opened the drawer.
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.getElementById("drawer-backdrop")?.classList.contains("open"));
+      expect(await page.locator("#health-panel").isHidden()).toBe(false);
+      expect(await page.evaluate(() => document.activeElement?.getAttribute("data-health-jump") ?? null)).toBe("dep-child");
+
+      // A second Escape dismisses the underlying health panel and focuses the badge.
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => document.getElementById("health-panel")?.hidden === true);
+      expect(await page.evaluate(() => document.activeElement?.id ?? null)).toBe("health-badge");
+
+      // Reopen the stack and drag from inside the drawer out onto the backdrop: the
+      // click Chromium fires on the common ancestor must not close the drawer.
+      await page.locator("#health-badge").click();
+      await page.waitForSelector("#health-panel:not([hidden])");
+      await page.locator('[data-health-jump="dep-child"]').click();
+      await page.waitForSelector("#drawer-backdrop.open");
+      const titleBox = await page.locator("#drawer-title").boundingBox();
+      expect(titleBox).not.toBeNull();
+      await page.mouse.move(titleBox!.x + titleBox!.width / 2, titleBox!.y + titleBox!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(200, 400, { steps: 8 });
+      await page.mouse.up();
+      expect(await page.locator("#drawer-backdrop.open").count()).toBe(1);
+      expect(await page.locator("#drawer-title").textContent()).toBe("Dependent Child");
+
+      // A genuine press starting and ending on the backdrop closes the drawer.
+      await page.mouse.click(200, 400);
+      await page.waitForFunction(() => !document.getElementById("drawer-backdrop")?.classList.contains("open"));
+      expect(await page.locator("#health-panel").isHidden()).toBe(false);
+      expect(await page.evaluate(() => document.activeElement?.getAttribute("data-health-jump") ?? null)).toBe("dep-child");
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a selected feature vanishing from the data hides the drawer, clears the selection, and restores graph shortcuts", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Vanish App", summary: "Stale selections must not block the graph." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    svc.addFeature({
+      id: "vanish-a",
+      title: "Vanishing Feature",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+    svc.addFeature({
+      id: "vanish-b",
+      title: "Surviving Feature",
+      milestone: "v0.1",
+      status: "planned",
+      area: "Core",
+    });
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="vanish-a"]');
+      await page.locator("#tab-graph").click();
+      await page.waitForSelector('.graph-node[data-feature-id="vanish-a"]');
+
+      await page.locator('.graph-node[data-feature-id="vanish-a"]').click();
+      await page.waitForSelector("#drawer-backdrop.open");
+      expect(await page.locator("#drawer-title").textContent()).toBe("Vanishing Feature");
+
+      // Delete the open feature on disk; the watcher-driven reload is the same live
+      // update path an offline edit takes on SSE reconnect.
+      svc.removeFeature("vanish-a");
+      await page.waitForFunction(
+        () => !document.getElementById("drawer-backdrop")?.classList.contains("open"),
+        null,
+        { timeout: 15000 }
+      );
+
+      // The stale selection must be gone: graph zoom shortcuts work again. The reload
+      // re-fit the camera to 100%, so a working "+" visibly raises the scale.
+      await page.keyboard.press("+");
+      await page.waitForFunction(
+        () => Number(document.getElementById("graph-canvas")?.getAttribute("data-scale")) > 1.05,
+        null,
+        { timeout: 15000 }
+      );
+      expect(await page.locator("#drawer-backdrop.open").count()).toBe(0);
+      expect(await page.locator('.graph-node[data-feature-id="vanish-a"]').count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("fit-to-view shows all nodes of a wide 24-feature layer at 1280px while interactive zoom stays floored", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Wide Fit App", summary: "Fit must reach every node in one wide layer." });
+    svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
+    for (let i = 1; i <= 24; i++) {
+      const id = `fit-${String(i).padStart(2, "0")}`;
+      svc.addFeature({
+        id,
+        title: `Wide Layer Feature ${i}`,
+        milestone: "v0.1",
+        status: "planned",
+        area: "Core",
+      });
+    }
+
+    handle = startViewServer(tempDir, { port: 0 });
+    browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+
+    try {
+      const page = await context.newPage();
+      await page.goto(handle.openUrl, { waitUntil: "networkidle" });
+      await page.waitForSelector('.card[data-feature-id="fit-01"]');
+      await page.locator("#tab-graph").click();
+      await page.waitForSelector('.graph-node[data-feature-id="fit-24"]');
+      expect(await page.locator(".graph-node").count()).toBe(24);
+
+      const vpBox = await page.locator("#graph-viewport").boundingBox();
+      expect(vpBox).not.toBeNull();
+
+      // Fit must drop below the old 0.25 floor to fit the whole layer.
+      await page.locator("#graph-zoom-fit").click();
+      const fitScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(fitScale).toBeGreaterThan(0);
+      expect(fitScale).toBeLessThan(0.25);
+      const fittedNodes = await page.locator(".graph-node").evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        })
+      );
+      for (const n of fittedNodes) {
+        expect(n.left).toBeGreaterThanOrEqual(vpBox!.x - 1);
+        expect(n.right).toBeLessThanOrEqual(vpBox!.x + vpBox!.width + 1);
+        expect(n.top).toBeGreaterThanOrEqual(vpBox!.y - 1);
+        expect(n.bottom).toBeLessThanOrEqual(vpBox!.y + vpBox!.height + 1);
+      }
+
+      // Zoom-in stays usable below the interactive floor.
+      await page.locator("#graph-zoom-in").click();
+      const afterZoomIn = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(afterZoomIn).toBeGreaterThan(fitScale);
+
+      // Wheeling out while below the floor is a no-op, never a zoom-in jump.
+      await page.mouse.move(vpBox!.x + vpBox!.width / 2, vpBox!.y + vpBox!.height / 2);
+      await page.mouse.wheel(0, 240);
+      const afterWheelOut = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(Math.abs(afterWheelOut - afterZoomIn)).toBeLessThan(0.0001);
+
+      // Wheeling in still works and raises the scale.
+      await page.mouse.wheel(0, -240);
+      const afterWheelIn = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(afterWheelIn).toBeGreaterThan(afterWheelOut);
+
+      // From the normal range the 0.25 interactive floor still applies to wheel zoom.
+      await page.locator("#graph-zoom-reset").click();
+      expect(Number(await page.locator("#graph-canvas").getAttribute("data-scale"))).toBe(1);
+      await page.mouse.move(vpBox!.x + vpBox!.width / 2, vpBox!.y + vpBox!.height / 2);
+      for (let i = 0; i < 6; i++) {
+        await page.mouse.wheel(0, 240);
+      }
+      const flooredScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(flooredScale).toBeGreaterThanOrEqual(0.25);
+      expect(flooredScale).toBeLessThan(1);
+    } finally {
+      await context.close();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
 });
