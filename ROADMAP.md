@@ -312,37 +312,39 @@ Publishes the audited repository to GitHub with clean metadata, branch protectio
 
 ## v1.0 — NPM Package Distribution (`v1.0`)
 
-**Status:** `active` | **Progress:** 0/3 features shipped
+**Status:** `active` | **Progress:** 2/3 features shipped
 
 Node.js 24+ and Bun runtime portability, bundled CLI packaging, and public npm release for single-command installation.
 
 ### Node.js 24+ & Bun Dual-Runtime Portability (`node-runtime-portability`)
 
-**Status:** `in-progress` | **Area:** Core | **Depends on:** `cli-core-hardening`, `multi-project-hub`
+**Status:** `shipped` | **Area:** Core | **Depends on:** `cli-core-hardening`, `multi-project-hub`
 
 Replaces Bun-only runtime calls (Bun.YAML, Bun.serve, Bun.spawn/stdin) with portable Node.js 24+ APIs and a lightweight YAML library while retaining full Bun support.
 
-**Ship Criteria (2/3):**
-- [ ] Preserves fast startup and clean zero-bloat dependency footprint
+**Ship Criteria (3/3):**
+- [x] Preserves fast startup and clean zero-bloat dependency footprint
 - [x] Replaces Bun.YAML, Bun.serve, and Bun.spawn/Bun.stdin with portable Node.js 24+ APIs and a lightweight YAML parser
 - [x] Passes full CLI, MCP, hub server, and Beads test suites under both Node.js 24+ and Bun
 
-> **Latest Pulse (2026-11-23T19:29:41.632Z):** Runtime evidence (harness: omp, machine: ws, profile: default, branch work/node-runtime-portability): Bun.YAML/Bun.serve/Bun.spawn/stdin/stringWidth/bun:sqlite replaced with yaml@2.9.1, node:http adapter, node:child_process, string-width@8.1.0, dual-driver lazy bun:sqlite|node:sqlite lock. Identical 167-test suite green in-process on Bun 1.3.9 (bun test + PP_REQUIRE_UI_TESTS=1) and Node (vitest 5.1.1 + UI incl. Chromium, PTY, Beads, MCP, hub restart). Cold-start medians (30 runs, 5 warmups, Bun 1.3.9, same session): source 50.3ms (--version) / 73.5ms (summary); bun dist/cli.js 30.3/55.2 (faster than source, no regression); node dist 66.3/86.6. Anchors consult current source.
+> **Latest Pulse (2026-11-23T19:35:11.612Z):** Startup/footprint closure: bun dist/cli.js medians 30.3ms --version / 55.2ms summary vs source 50.3/73.5 (Bun 1.3.9, same session, 30 runs/5 warmups); node dist 66.3/86.6 on Node 26.13.1 with 24.0.0 floor proven in CI. Bundle 668,568 bytes; tarball 151,290 bytes; zero install-time dependencies, packages, or postinstall steps (yaml@2.9.1 + string-width@8.1.0 bundled from exact devDependencies).
 
 ### NPM Package Build & Clean-Install Verification (`npm-package-build`)
 
-**Status:** `planned` | **Area:** Release | **Depends on:** `node-runtime-portability`
+**Status:** `shipped` | **Area:** Release | **Depends on:** `node-runtime-portability`
 
 Produces a clean bundled dist/cli.js package with Node shebang and verifies local npm pack installs across Node.js and Bun.
 
-**Ship Criteria (0/3):**
-- [ ] Builds dist/cli.js with #!/usr/bin/env node and clean package.json bin, files, and engines fields
-- [ ] Verifies npm pack tarball contents exclude repo-only scratch/test artifacts
-- [ ] Passes clean-environment smoke tests for npx, npm i -g, and bunx installs
+**Ship Criteria (3/3):**
+- [x] Builds dist/cli.js with #!/usr/bin/env node and clean package.json bin, files, and engines fields
+- [x] Verifies npm pack tarball contents exclude repo-only scratch/test artifacts
+- [x] Passes clean-environment smoke tests for npx, npm i -g, and bunx installs
+
+> **Latest Pulse (2026-11-23T19:35:11.527Z):** Packaging evidence (harness: omp, machine: ws, profile: default; commits 5e1f005da7 + RC): npm pack (npm 11.20.0, --ignore-scripts) ships exactly LICENSE, README.md, package.json, dist/cli.js, dist/THIRD-PARTY-NOTICES.txt (151,290 bytes; no sources/tests/roadmap/node_modules/sourcemaps). RC 1.0.0-rc.1 SRI sha512-Y/IdR9nG3QuK9L4P6iV3Z1/FepGUZ3o+kOgZ6S1bVutPkRxYx11JT6xGMFGxw5jYcseyD+2ZPb0j9KgCH/mAHg==. Consumer proofs from the packed bytes, fresh HOME/cache/prefix/PROJECT_PULSE_HOME: Node 24.0.0 floor and 24.22.2 LTS without bun on PATH (npx --package=TGZ, npm i -g, both bin aliases, init/note/readback/summary/check, single-line MCP initialize id:1); Bun 1.3.9 with node absent from an isolated PATH (bun add + bunx --bun --no-install project-pulse and pp). Bun 1.3.0 floor execution covered by CI dist smoke.
 
 ### Public NPM Registry Publish & Release Automation (`npm-registry-publish`)
 
-**Status:** `planned` | **Area:** Release | **Depends on:** `npm-package-build`, `public-repo-launch`
+**Status:** `in-progress` | **Area:** Release | **Depends on:** `npm-package-build`, `public-repo-launch`
 
 Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
 
