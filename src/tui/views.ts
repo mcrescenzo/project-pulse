@@ -1,6 +1,6 @@
 import type { BeadStatusInfo, Feature, FeatureStatus, Milestone, ValidationIssue } from "../types";
 import type { RoadmapViewPayload } from "../dashboard-html";
-import { ScreenBuffer, TUI_PALETTE, truncateText, type CellStyle, type PaletteColor } from "./screen";
+import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, type CellStyle, type PaletteColor } from "./screen";
 
 /**
  * Hit-test z layers mirroring overlay paint order in TuiController.render():
@@ -74,6 +74,10 @@ export interface TuiState {
   boardActiveCol: number;
   openPicker: OpenPicker | null;
   pickerSelectedIndex: number;
+  /** First visible row of the floating picker (wheel offset; snapped to keyboard focus at render). */
+  pickerScrollY: number;
+  /** First visible diagnostic row of the Health overlay. */
+  healthScrollY: number;
   mouseEnabled: boolean;
   graphHoverEnabled: boolean;
   graphSelectedId: string | null;
@@ -95,6 +99,12 @@ export interface FilteredData {
   hasFeatureFilter: boolean;
   hasActiveFilters: boolean;
   areas: string[];
+  /**
+   * Statuses selected by the status filter; `null` when unset. A value like
+   * "paused|cut" matches any of its parts so combined KPI tallies filter exactly
+   * the features they count.
+   */
+  statusFilterValues: Set<string> | null;
 }
 
 export interface StatusStyle {
@@ -150,6 +160,8 @@ export function createInitialTuiState(
     boardActiveCol: 0,
     openPicker: null,
     pickerSelectedIndex: 0,
+    pickerScrollY: 0,
+    healthScrollY: 0,
     mouseEnabled: true,
     graphHoverEnabled: true,
     graphSelectedId: null,
@@ -176,12 +188,13 @@ export function createInitialTuiState(
 export function computeFilteredData(state: TuiState): FilteredData {
   const { payload } = state;
   const q = state.search.trim().toLowerCase();
+  const statusFilterValues = state.statusFilter ? new Set(state.statusFilter.split("|")) : null;
   const hasFeatureFilter = Boolean(state.statusFilter || state.areaFilter || q);
   const hasActiveFilters = Boolean(state.milestoneFilter || hasFeatureFilter);
 
   const filteredFeatures = payload.features.filter((f) => {
     if (state.milestoneFilter && f.milestone !== state.milestoneFilter) return false;
-    if (state.statusFilter && f.status !== state.statusFilter) return false;
+    if (statusFilterValues && !statusFilterValues.has(f.status)) return false;
     if (state.areaFilter && f.area !== state.areaFilter) return false;
     if (
       q &&
@@ -214,7 +227,17 @@ export function computeFilteredData(state: TuiState): FilteredData {
     hasFeatureFilter,
     hasActiveFilters,
     areas,
+    statusFilterValues,
   };
+}
+
+/**
+ * Option rows visible in the floating picker for a terminal of `height` rows.
+ * Shared by the renderer (window paint) and the controller (keyboard reveal) so
+ * both agree on the window size.
+ */
+export function pickerVisibleRows(height: number, optionCount: number): number {
+  return Math.max(1, Math.min(height - 4, optionCount));
 }
 
 export function buildPickerOptions(
@@ -236,6 +259,7 @@ export function buildPickerOptions(
       { value: "shipped", label: "shipped" },
       { value: "paused", label: "paused" },
       { value: "cut", label: "cut" },
+      { value: "paused|cut", label: "paused / cut" },
     ];
   }
   return [
@@ -570,7 +594,7 @@ export function renderHeaderAndKpis(
     { id: "kpi-shipped", filterValue: "shipped", label: "SHIPPED", value: String(shipped), fg: TUI_PALETTE.green },
     { id: "kpi-active", filterValue: "in-progress", label: "ACTIVE", value: String(inProgress), fg: TUI_PALETTE.accent },
     { id: "kpi-planned", filterValue: "planned", label: "PLANNED", value: String(planned), fg: TUI_PALETTE.slate },
-    { id: "kpi-paused", filterValue: "paused", label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
+    { id: "kpi-paused", filterValue: "paused|cut", label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
   ];
 
   if (state.viewMode === "graph" || width < 90) {
@@ -654,7 +678,11 @@ export function renderTabsAndFilters(
 
   const filterBtns: Array<{ kind: PickerKind; prefix: string; val: string }> = [
     { kind: "milestone", prefix: "M:", val: state.milestoneFilter || "All" },
-    { kind: "status", prefix: "S:", val: state.statusFilter || "All" },
+    {
+      kind: "status",
+      prefix: "S:",
+      val: state.statusFilter ? state.statusFilter.split("|").join(" / ") : "All",
+    },
     { kind: "area", prefix: "A:", val: state.areaFilter || "All" },
   ];
 
@@ -721,10 +749,12 @@ export function renderCardsView(
   rect: Rect,
   state: TuiState,
   filtered: FilteredData
-): { maxScrollY: number; orderedFeatureIds: string[] } {
+): { maxScrollY: number; orderedFeatureIds: string[]; featureBounds: Map<string, { y: number; h: number }> } {
   const { payload } = state;
   const q = state.search.trim().toLowerCase();
   const orderedFeatureIds: string[] = [];
+  // Virtual (pre-scroll) row geometry per feature so keyboard selection can reveal itself.
+  const featureBounds = new Map<string, { y: number; h: number }>();
 
   if (filtered.visibleMilestones.length === 0) {
     const msg =
@@ -732,7 +762,7 @@ export function renderCardsView(
         ? "No features match the active filter."
         : "No milestones match the active filter.";
     buf.writeText(rect.x + 1, rect.y + 1, msg, rect.w - 2, { fg: TUI_PALETTE.muted });
-    return { maxScrollY: 0, orderedFeatureIds };
+    return { maxScrollY: 0, orderedFeatureIds, featureBounds };
   }
 
   const cols = rect.w >= 108 ? 3 : rect.w >= 68 ? 2 : 1;
@@ -752,7 +782,7 @@ export function renderCardsView(
   for (const m of filtered.visibleMilestones) {
     const allMFeatures = payload.features.filter((f) => f.milestone === m.id);
     const mFeatures = allMFeatures.filter((f) => {
-      if (state.statusFilter && f.status !== state.statusFilter) return false;
+      if (filtered.statusFilterValues && !filtered.statusFilterValues.has(f.status)) return false;
       if (state.areaFilter && f.area !== state.areaFilter) return false;
       if (
         q &&
@@ -847,6 +877,7 @@ export function renderCardsView(
         const row = Math.floor(idx / cols);
         const cx = sectionPadX + innerPad + col * (colW + gapX);
         const cy = cardsStartY + row * (cardH + gapY);
+        featureBounds.set(f.id, { y: cy, h: cardH });
         const cwActual = col === cols - 1 ? sectionPadX + sectionW - innerPad - cx : colW;
 
         ops.push((cw) => {
@@ -876,11 +907,21 @@ export function renderCardsView(
           }
 
           const areaText = f.area ?? "";
-          cw.writeText(cx + 2, cy + 2, f.id, Math.max(4, innerW - areaText.length - 1), {
+          // The right-aligned area label stays inside its own card: measured in
+          // terminal cells, capped to the space left of the feature ID, and
+          // ellipsis-truncated so it can never paint into adjacent cards. The
+          // whole card remains the click target either way.
+          const cardLeft = cx + 2;
+          const cardRight = cx + Math.max(2, cwActual - 2);
+          const areaW = textCellWidth(areaText);
+          const areaAvail = Math.max(0, Math.min(areaW, cardRight - cardLeft - 5));
+          const areaX = cardRight - areaAvail;
+          const idMax = Math.max(1, (areaAvail > 0 ? areaX - 1 : cardRight) - cardLeft);
+          cw.writeText(cardLeft, cy + 2, f.id, idMax, {
             fg: TUI_PALETTE.muted,
           });
-          if (areaText) {
-            cw.writeText(cx + cwActual - 2 - areaText.length, cy + 2, areaText, areaText.length, {
+          if (areaAvail > 0) {
+            cw.writeText(areaX, cy + 2, truncateText(areaText, areaAvail), areaAvail, {
               fg: TUI_PALETTE.slate,
             });
           }
@@ -933,7 +974,7 @@ export function renderCardsView(
   const writer = new ClipWriter(buf, rect, clampedScroll, 8);
   for (const op of ops) op(writer);
 
-  return { maxScrollY, orderedFeatureIds };
+  return { maxScrollY, orderedFeatureIds, featureBounds };
 }
 
 export function renderBoardView(
@@ -941,12 +982,18 @@ export function renderBoardView(
   rect: Rect,
   state: TuiState,
   filtered: FilteredData
-): { columns: FeatureStatus[]; orderedFeatureIds: string[] } {
+): {
+  columns: FeatureStatus[];
+  orderedFeatureIds: string[];
+  featureBounds: Map<string, { y: number; h: number }>;
+  columnViewports: Map<FeatureStatus, { y: number; h: number; maxScroll: number }>;
+} {
   const columns: FeatureStatus[] = ["planned", "in-progress", "shipped"];
-  if (state.statusFilter === "paused" || state.payload.features.some((f) => f.status === "paused")) {
+  const statusValues = filtered.statusFilterValues;
+  if ((statusValues?.has("paused") ?? false) || state.payload.features.some((f) => f.status === "paused")) {
     columns.push("paused");
   }
-  if (state.statusFilter === "cut" || state.payload.features.some((f) => f.status === "cut")) {
+  if ((statusValues?.has("cut") ?? false) || state.payload.features.some((f) => f.status === "cut")) {
     columns.push("cut");
   }
 
@@ -959,6 +1006,10 @@ export function renderBoardView(
   };
 
   const orderedFeatureIds: string[] = [];
+  // Per-column viewport (screen rect + scroll cap) and per-card virtual geometry so
+  // keyboard selection can reveal itself in its own column.
+  const featureBounds = new Map<string, { y: number; h: number }>();
+  const columnViewports = new Map<FeatureStatus, { y: number; h: number; maxScroll: number }>();
 
   if (rect.w < 90) {
     state.boardActiveCol = Math.max(0, Math.min(state.boardActiveCol, columns.length - 1));
@@ -987,9 +1038,11 @@ export function renderBoardView(
       activeStatus,
       labels[activeStatus],
       colFeatures,
-      state
+      state,
+      featureBounds,
+      columnViewports
     );
-    return { columns, orderedFeatureIds };
+    return { columns, orderedFeatureIds, featureBounds, columnViewports };
   }
 
   const gap = 1;
@@ -1005,11 +1058,13 @@ export function renderBoardView(
       colStatus,
       labels[colStatus],
       colFeatures,
-      state
+      state,
+      featureBounds,
+      columnViewports
     );
   });
 
-  return { columns, orderedFeatureIds };
+  return { columns, orderedFeatureIds, featureBounds, columnViewports };
 }
 
 function renderBoardColumn(
@@ -1018,7 +1073,9 @@ function renderBoardColumn(
   colStatus: FeatureStatus,
   label: string,
   features: Feature[],
-  state: TuiState
+  state: TuiState,
+  featureBounds: Map<string, { y: number; h: number }>,
+  columnViewports: Map<FeatureStatus, { y: number; h: number; maxScroll: number }>
 ): void {
   const st = getStatusStyle(colStatus);
   buf.drawBox(colRect.x, colRect.y, colRect.w, colRect.h, {
@@ -1053,6 +1110,7 @@ function renderBoardColumn(
     w: Math.max(8, colRect.w - 2),
     h: Math.max(1, colRect.h - 4),
   };
+  columnViewports.set(colStatus, { y: listRect.y, h: listRect.h, maxScroll: 0 });
 
   if (features.length === 0) {
     buf.writeText(listRect.x + 1, listRect.y, "No features", listRect.w - 2, {
@@ -1064,12 +1122,14 @@ function renderBoardColumn(
   const cardH = 5;
   const totalH = features.length * (cardH + 1) - 1;
   const maxScroll = Math.max(0, totalH - listRect.h);
+  columnViewports.set(colStatus, { y: listRect.y, h: listRect.h, maxScroll });
   const scrollY = Math.max(0, Math.min(state.boardScrollY[colStatus] ?? 0, maxScroll));
   state.boardScrollY[colStatus] = scrollY;
 
   const cw = new ClipWriter(buf, listRect, scrollY, 8);
   features.forEach((f, idx) => {
     const cy = idx * (cardH + 1);
+    featureBounds.set(f.id, { y: cy, h: cardH });
     const cardW = Math.max(8, listRect.w - 2);
     const cardX = listRect.x + 1;
     const isSel = state.selectedFeatureId === f.id;
@@ -1124,6 +1184,12 @@ export function renderFloatingPicker(
       ? state.statusFilter
       : state.areaFilter;
 
+  const maxRows = pickerVisibleRows(height, picker.options.length);
+  const total = picker.options.length;
+  // Wheel-driven offset, clamped only: keyboard movement moves the window itself so
+  // wheeling away from the focused option is never undone by a render.
+  state.pickerScrollY = Math.max(0, Math.min(state.pickerScrollY, Math.max(0, total - maxRows)));
+
   buf.drawBox(x, y, w, h, {
     borderStyle: { fg: TUI_PALETTE.accent },
     fillStyle: { bg: TUI_PALETTE.surface },
@@ -1131,10 +1197,11 @@ export function renderFloatingPicker(
     titleStyle: { fg: TUI_PALETTE.accent, bold: true },
   });
 
-  const maxRows = h - 2;
-  for (let i = 0; i < Math.min(maxRows, picker.options.length); i++) {
+  const visibleRows = Math.min(maxRows, total - state.pickerScrollY);
+  for (let row = 0; row < visibleRows; row++) {
+    const i = state.pickerScrollY + row;
     const opt = picker.options[i]!;
-    const rowY = y + 1 + i;
+    const rowY = y + 1 + row;
     const isFocused = i === state.pickerSelectedIndex;
     const isChecked = opt.value === currentValue;
     if (isFocused) {
@@ -1249,8 +1316,15 @@ export function renderHealthOverlay(
     return;
   }
 
-  let rowY = firstRowY + (state.loadError ? 2 : 0);
-  for (let i = 0; i < issues.length && rowY < y + h - 2; i++) {
+  // Scrollable diagnostic list: the window clamps to the issue count so the final
+  // diagnostic is reachable (and its Inspect pill clickable) on short terminals.
+  const listTop = firstRowY + (state.loadError ? 2 : 0);
+  const maxRows = Math.max(1, y + h - 2 - listTop);
+  const maxScroll = Math.max(0, issues.length - maxRows);
+  state.healthScrollY = Math.max(0, Math.min(state.healthScrollY, maxScroll));
+
+  let rowY = listTop;
+  for (let i = state.healthScrollY; i < issues.length && rowY < y + h - 2; i++) {
     const { level, item } = issues[i]!;
     const st = level === "error"
       ? { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft }
@@ -1277,6 +1351,12 @@ export function renderHealthOverlay(
       );
     }
     rowY += 1;
+  }
+  if (maxScroll > 0) {
+    const position = `${state.healthScrollY + 1}-${Math.min(issues.length, state.healthScrollY + maxRows)}/${issues.length}`;
+    buf.writeText(x + w - 2 - position.length, y + h - 2, position, position.length, {
+      fg: TUI_PALETTE.muted,
+    });
   }
 }
 

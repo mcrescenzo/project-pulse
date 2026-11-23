@@ -26,6 +26,7 @@ import {
   renderHeaderAndKpis,
   renderHealthOverlay,
   renderTabsAndFilters,
+  pickerVisibleRows,
   type PickerKind,
   type Rect,
   type TuiState,
@@ -69,9 +70,14 @@ export class TuiController {
   private stopped = false;
   private lastOrderedIds: string[] = [];
   private lastCardsMaxScroll = 0;
+  private lastCardsBounds = new Map<string, { y: number; h: number }>();
   private lastBoardCols: string[] = [];
+  private lastBoardFeatureBounds = new Map<string, { y: number; h: number }>();
+  private lastBoardViewports = new Map<string, { y: number; h: number; maxScroll: number }>();
   private lastGraphLayout: WaterfallLayout | null = null;
   private lastDrawerMaxScroll = 0;
+  /** One-shot: next frame scrolls the drawer so the focused note input is visible. */
+  private noteRevealPending = false;
   private liveWatch: LiveWatcherHandle | null = null;
   private watchDebounce: ReturnType<typeof setTimeout> | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
@@ -208,6 +214,7 @@ export class TuiController {
         !this.state.noBeads && this.state.payload.config.integrations.beads.enabled;
       if (!beadsStillWanted) return;
       this.state.payload = fullPayload;
+      this.reconcileAfterPayloadChange();
       this.state.beadsLoading = false;
       this.render();
     } catch {
@@ -242,11 +249,14 @@ export class TuiController {
       const res = renderCardsView(buf, rect, this.state, filtered);
       this.lastCardsMaxScroll = res.maxScrollY;
       this.lastOrderedIds = res.orderedFeatureIds;
+      this.lastCardsBounds = res.featureBounds;
       this.lastGraphLayout = null;
     } else if (this.state.viewMode === "board") {
       const res = renderBoardView(buf, rect, this.state, filtered);
       this.lastBoardCols = res.columns;
       this.lastOrderedIds = res.orderedFeatureIds;
+      this.lastBoardFeatureBounds = res.featureBounds;
+      this.lastBoardViewports = res.columnViewports;
       this.lastGraphLayout = null;
     } else {
       this.lastGraphLayout = renderWaterfallGraphView(buf, rect, this.state, filtered);
@@ -255,7 +265,10 @@ export class TuiController {
         : [];
     }
 
-    const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state);
+    const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state, {
+      revealNote: this.noteRevealPending,
+    });
+    this.noteRevealPending = false;
     this.lastDrawerMaxScroll = drawerResult ? drawerResult.maxScrollY : 0;
     renderFloatingPicker(buf, w, h, this.state);
     renderHealthOverlay(buf, w, h, this.state);
@@ -294,11 +307,13 @@ export class TuiController {
       }
       if (ev.key === "up" || ev.key === "k") {
         this.state.pickerSelectedIndex = Math.max(0, this.state.pickerSelectedIndex - 1);
+        this.ensurePickerRowVisible(this.state.pickerSelectedIndex);
         this.render();
         return;
       }
       if (ev.key === "down" || ev.key === "j") {
         this.state.pickerSelectedIndex = Math.min(opts.length - 1, this.state.pickerSelectedIndex + 1);
+        this.ensurePickerRowVisible(this.state.pickerSelectedIndex);
         this.render();
         return;
       }
@@ -325,6 +340,17 @@ export class TuiController {
       if (ev.key === "escape") {
         this.state.healthPanelOpen = false;
         this.render();
+        return;
+      }
+      if (ev.key === "pagedown") {
+        this.state.healthScrollY += 4;
+        this.render();
+        return;
+      }
+      if (ev.key === "pageup") {
+        this.state.healthScrollY = Math.max(0, this.state.healthScrollY - 4);
+        this.render();
+        return;
       }
       return;
     }
@@ -338,21 +364,34 @@ export class TuiController {
       if (ev.key === "backspace") {
         this.state.search = segmentText(this.state.search).slice(0, -1).join("");
         this.state.cardsScrollY = 0;
+        this.reconcileSelection();
         this.render();
         return;
       }
       if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
         this.state.search += ev.key;
         this.state.cardsScrollY = 0;
+        this.reconcileSelection();
         this.render();
         return;
       }
       return;
     }
 
-    if (this.state.drawerFeatureId && this.state.drawerFocus === "note") {
-      this.handleDrawerNoteKey(ev, this.state.drawerFeatureId);
+    const noteTarget = this.state.drawerFeatureId;
+    const noteFeature = noteTarget
+      ? this.state.payload.features.find((f) => f.id === noteTarget)
+      : undefined;
+    if (noteTarget && this.state.drawerFocus === "note" && noteFeature) {
+      this.handleDrawerNoteKey(ev, noteTarget);
       return;
+    }
+    if (noteTarget && !noteFeature) {
+      // Feature removed on disk mid-note-entry: the drawer is already unpainted,
+      // so release the editor instead of swallowing keys into an invisible draft.
+      this.state.drawerFeatureId = null;
+      this.state.drawerFocus = "criteria";
+      this.state.drawerFeedback = null;
     }
 
     if (ev.key === "q") {
@@ -388,12 +427,11 @@ export class TuiController {
         return;
       }
       if (ev.key === "tab") {
-        this.state.drawerFocus = this.state.drawerFocus === "criteria" ? "note" : "criteria";
-        if (this.state.drawerFocus === "note") {
-          this.state.noteCursor = segmentText(
-            this.state.noteDrafts[this.state.drawerFeatureId] ?? ""
-          ).length;
+        if (this.state.drawerFocus === "criteria") {
+          this.focusDrawerNote(this.state.drawerFeatureId);
+          return;
         }
+        this.state.drawerFocus = "criteria";
         this.render();
         return;
       }
@@ -494,9 +532,9 @@ export class TuiController {
       if (ev.key === "enter") {
         const fid = this.state.graphSelectedId ?? this.state.selectedFeatureId;
         if (fid) {
-          this.state.selectedFeatureId = fid;
-          this.state.drawerFeatureId = fid;
-          this.render();
+          // Full drawer initialization (fresh scroll, criteria focus, first criterion)
+          // instead of a bare drawerFeatureId assignment.
+          this.openDrawer(fid);
         }
         return;
       }
@@ -517,8 +555,11 @@ export class TuiController {
       this.scrollActiveView(-6);
       return;
     }
-    if (ev.key === "enter" && this.state.selectedFeatureId) {
-      this.openDrawer(this.state.selectedFeatureId);
+    if (ev.key === "enter") {
+      const target = this.state.selectedFeatureId;
+      if (target && this.isFeatureVisible(target)) {
+        this.openDrawer(target);
+      }
     }
   }
 
@@ -570,6 +611,16 @@ export class TuiController {
         this.render();
         return;
       }
+      if (hit?.kind === "picker-option" || hit?.kind === "picker-backdrop") {
+        this.state.pickerScrollY += 3;
+        this.render();
+        return;
+      }
+      if (hit?.kind === "health-backdrop" || hit?.kind === "health-jump" || hit?.kind === "health-close") {
+        this.state.healthScrollY += 3;
+        this.render();
+        return;
+      }
       if (this.state.viewMode === "graph" && (hit?.kind === "graph-viewport" || hit?.kind === "graph-node")) {
         this.zoomGraph(-1);
         return;
@@ -580,6 +631,16 @@ export class TuiController {
     if (ev.action === "wheel-up") {
       if (hit && hit.kind.startsWith("drawer-")) {
         this.state.drawerScrollY = Math.max(0, this.state.drawerScrollY - 2);
+        this.render();
+        return;
+      }
+      if (hit?.kind === "picker-option" || hit?.kind === "picker-backdrop") {
+        this.state.pickerScrollY = Math.max(0, this.state.pickerScrollY - 3);
+        this.render();
+        return;
+      }
+      if (hit?.kind === "health-backdrop" || hit?.kind === "health-jump" || hit?.kind === "health-close") {
+        this.state.healthScrollY = Math.max(0, this.state.healthScrollY - 3);
         this.render();
         return;
       }
@@ -713,6 +774,8 @@ export class TuiController {
             0,
             options.findIndex((o) => o.value === activeVal)
           );
+          this.state.pickerScrollY = 0;
+          this.ensurePickerRowVisible(this.state.pickerSelectedIndex);
         }
         this.render();
         break;
@@ -748,12 +811,14 @@ export class TuiController {
         this.state.cardsScrollY = 0;
         this.state.boardScrollY = {};
         this.state.openPicker = null;
+        this.reconcileSelection();
         this.render();
         break;
       }
       case "health-toggle": {
         this.state.openPicker = null;
         this.state.healthPanelOpen = !this.state.healthPanelOpen;
+        this.state.healthScrollY = 0;
         this.render();
         break;
       }
@@ -791,6 +856,7 @@ export class TuiController {
         this.state.cardsScrollY = 0;
         this.state.boardScrollY = {};
         this.state.openPicker = null;
+        this.reconcileSelection();
         this.render();
         break;
       }
@@ -837,6 +903,7 @@ export class TuiController {
     else this.state.areaFilter = value;
     this.state.cardsScrollY = 0;
     this.state.boardScrollY = {};
+    this.reconcileSelection();
   }
 
   private toggleMouse(): void {
@@ -899,6 +966,7 @@ export class TuiController {
       this.state.loadError = null;
       this.state.toast = { kind: "ok", message: "Recovered roadmap from disk" };
     }
+    this.reconcileAfterPayloadChange();
     this.render();
   }
 
@@ -912,6 +980,7 @@ export class TuiController {
 
   private openDrawer(featureId: string): void {
     this.state.selectedFeatureId = featureId;
+    this.state.graphSelectedId = featureId;
     this.state.drawerFeatureId = featureId;
     this.state.drawerScrollY = 0;
     this.state.drawerFocus = "criteria";
@@ -930,15 +999,26 @@ export class TuiController {
   private focusDrawerNote(featureId: string): void {
     this.state.drawerFocus = "note";
     this.state.noteCursor = segmentText(this.state.noteDrafts[featureId] ?? "").length;
+    // Reveal the inline input on short panes during the next frame.
+    this.noteRevealPending = true;
     this.render();
   }
 
   private copyActiveFeatureId(explicitId?: string): void {
+    const exists = (id: string | null | undefined): id is string =>
+      Boolean(id) && this.state.payload.features.some((f) => f.id === id);
+    const visible = this.visibleFeatureIds();
     const target =
-      explicitId ||
-      this.state.drawerFeatureId ||
-      (this.state.viewMode === "graph" ? this.state.graphSelectedId : null) ||
-      this.state.selectedFeatureId;
+      (exists(explicitId) && explicitId) ||
+      (exists(this.state.drawerFeatureId) && this.state.drawerFeatureId) ||
+      (this.state.viewMode === "graph" &&
+        this.state.graphSelectedId &&
+        visible.has(this.state.graphSelectedId) &&
+        this.state.graphSelectedId) ||
+      (this.state.selectedFeatureId &&
+        visible.has(this.state.selectedFeatureId) &&
+        this.state.selectedFeatureId) ||
+      null;
     if (!target) {
       this.state.toast = { kind: "info", message: "No feature selected to copy" };
       this.render();
@@ -1058,12 +1138,147 @@ export class TuiController {
         : Math.max(0, Math.min(this.lastOrderedIds.length - 1, idx + delta));
     const nextId = this.lastOrderedIds[nextIdx] ?? null;
     this.state.selectedFeatureId = nextId;
-    if (this.state.viewMode === "graph") {
-      this.state.graphSelectedId = nextId;
+    if (!nextId) {
       this.render();
       return;
     }
-    this.scrollActiveView(delta * 2);
+    if (this.state.viewMode === "graph") {
+      this.state.graphSelectedId = nextId;
+      this.revealGraphNode(nextId);
+      this.render();
+      return;
+    }
+    this.revealListSelection(nextId);
+    this.render();
+  }
+
+  /**
+   * Scrolls the active cards/board view by the selected card's real row geometry so
+   * every keyboard selection stays on screen (replacing the old fixed two-row nudge).
+   */
+  private revealListSelection(featureId: string): void {
+    if (this.state.viewMode === "cards") {
+      const bounds = this.lastCardsBounds.get(featureId);
+      if (!bounds) return;
+      const viewH = Math.max(1, this.mainRect.h);
+      let scroll = this.state.cardsScrollY;
+      if (bounds.y < scroll) {
+        scroll = bounds.y;
+      } else if (bounds.y + bounds.h > scroll + viewH) {
+        scroll = bounds.y + bounds.h - viewH;
+      }
+      this.state.cardsScrollY = Math.max(0, Math.min(this.lastCardsMaxScroll, scroll));
+      return;
+    }
+    if (this.state.viewMode === "board") {
+      const feature = this.state.payload.features.find((f) => f.id === featureId);
+      if (!feature) return;
+      const viewport = this.lastBoardViewports.get(feature.status);
+      const bounds = this.lastBoardFeatureBounds.get(featureId);
+      if (!viewport || !bounds) return;
+      let scroll = this.state.boardScrollY[feature.status] ?? 0;
+      if (bounds.y < scroll) {
+        scroll = bounds.y;
+      } else if (bounds.y + bounds.h > scroll + viewport.h) {
+        scroll = bounds.y + bounds.h - viewport.h;
+      }
+      this.state.boardScrollY[feature.status] = Math.max(0, Math.min(viewport.maxScroll, scroll));
+    }
+  }
+
+  /**
+   * Pans the graph camera minimally (existing tx/ty translation, then clamp) so the
+   * selected node's full bounding box is inside the viewport.
+   */
+  private revealGraphNode(featureId: string): void {
+    const layout = this.lastGraphLayout;
+    const node = layout?.nodes.get(featureId);
+    if (!layout || !node) return;
+    const vpRect = getGraphViewportRect(this.mainRect);
+    const innerX = vpRect.x + 1;
+    const innerY = vpRect.y + 1;
+    const innerW = Math.max(1, vpRect.w - 2);
+    const innerH = Math.max(1, vpRect.h - 2);
+    const cam = this.state.graphCamera;
+    const left = innerX + cam.tx + node.x;
+    const top = innerY + cam.ty + node.y;
+    if (left < innerX) {
+      cam.tx += innerX - left;
+    } else if (left + node.w > innerX + innerW) {
+      cam.tx -= left + node.w - (innerX + innerW);
+    }
+    if (top < innerY) {
+      cam.ty += innerY - top;
+    } else if (top + node.h > innerY + innerH) {
+      cam.ty -= top + node.h - (innerY + innerH);
+    }
+    clampGraphCamera(layout.stageW, layout.stageH, vpRect, cam);
+  }
+
+  /** Feature ids present under the active filters — the ids keyboard actions may address. */
+  private visibleFeatureIds(): Set<string> {
+    return new Set(computeFilteredData(this.state).filteredFeatures.map((f) => f.id));
+  }
+
+  private isFeatureVisible(featureId: string): boolean {
+    return this.visibleFeatureIds().has(featureId);
+  }
+
+  /**
+   * Nudges the picker scroll window so the keyboard-focused option stays inside it.
+   * Wheel offsets are respected; only out-of-window focus moves the window.
+   */
+  private ensurePickerRowVisible(index: number): void {
+    const picker = this.state.openPicker;
+    if (!picker) return;
+    const maxRows = pickerVisibleRows(this.session.height, picker.options.length);
+    const maxScroll = Math.max(0, picker.options.length - maxRows);
+    const scroll = this.state.pickerScrollY;
+    if (index < scroll) {
+      this.state.pickerScrollY = index;
+    } else if (index >= scroll + maxRows) {
+      this.state.pickerScrollY = index - maxRows + 1;
+    }
+    this.state.pickerScrollY = Math.max(0, Math.min(this.state.pickerScrollY, maxScroll));
+  }
+
+  /**
+   * Keeps selectedFeatureId (and its graph mirror) pointing at a feature visible under
+   * the active filters, moving the highlight to the first visible feature otherwise.
+   * Reconciling never opens the drawer.
+   */
+  private reconcileSelection(): void {
+    const filteredFeatures = computeFilteredData(this.state).filteredFeatures;
+    const current = this.state.selectedFeatureId;
+    if (current && filteredFeatures.some((f) => f.id === current)) {
+      if (
+        this.state.graphSelectedId &&
+        !filteredFeatures.some((f) => f.id === this.state.graphSelectedId)
+      ) {
+        this.state.graphSelectedId = current;
+      }
+      return;
+    }
+    const next = filteredFeatures[0]?.id ?? null;
+    this.state.selectedFeatureId = next;
+    this.state.graphSelectedId = next;
+  }
+
+  /**
+   * Reconciles drawer and selection state after the payload snapshot is replaced: a
+   * feature removed on disk closes the drawer (releasing any note draft input), and the
+   * selection moves to a still-visible feature without opening anything.
+   */
+  private reconcileAfterPayloadChange(): void {
+    const drawerId = this.state.drawerFeatureId;
+    if (drawerId && !this.state.payload.features.some((f) => f.id === drawerId)) {
+      this.state.drawerFeatureId = null;
+      this.state.drawerFocus = "criteria";
+      this.state.drawerFeedback = null;
+      delete this.state.noteDrafts[drawerId];
+      this.state.noteCursor = 0;
+    }
+    this.reconcileSelection();
   }
 
   private handleGraphClick(targetNodeId: string | null): void {
@@ -1074,7 +1289,6 @@ export class TuiController {
     }
     if (this.state.graphHoverEnabled) {
       this.openDrawer(targetNodeId);
-      this.state.graphSelectedId = targetNodeId;
       return;
     }
     if (this.state.graphSelectedId === targetNodeId) {
@@ -1178,12 +1392,31 @@ export class TuiController {
     }
     if (this.state.viewMode === "board") {
       const col =
-        hit?.kind === "board-col"
-          ? String(hit.data)
-          : this.lastBoardCols[this.state.boardActiveCol] ?? "planned";
+        this.boardColumnAtPoint(hit) ??
+        this.lastBoardCols[this.state.boardActiveCol] ??
+        "planned";
       this.state.boardScrollY[col] = Math.max(0, (this.state.boardScrollY[col] ?? 0) + delta);
       this.render();
     }
+  }
+
+  /**
+   * Resolves the board column a wheel event landed on. Visible cards carry their own
+   * higher-priority hit region, so a card hit maps to its feature's status column;
+   * only an explicit column backdrop hit (or an unmatched hit) falls back to callers'
+   * active-column default.
+   */
+  private boardColumnAtPoint(hit: HitRegion | null): string | null {
+    if (!hit) return null;
+    if (hit.kind === "board-col") return String(hit.data);
+    if (hit.kind === "feature-card") {
+      const featureId = String(hit.data ?? "");
+      const feature = this.state.payload.features.find((f) => f.id === featureId);
+      if (feature && this.lastBoardCols.includes(feature.status)) {
+        return feature.status;
+      }
+    }
+    return null;
   }
 }
 
