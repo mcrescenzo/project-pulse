@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createMcpHandler } from "../src/mcp";
 import { RoadmapService } from "../src/store";
 
 let tempDir: string;
@@ -120,6 +121,15 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
           arguments: { id: "does-not-exist" },
         },
       },
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: {
+          name: "roadmap_nonexistent",
+          arguments: {},
+        },
+      },
     ];
 
     const stdinPayload = `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`;
@@ -146,8 +156,8 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
       .split("\n")
       .map((line) => JSON.parse(line));
 
-    // Notification id-less message must produce no response -> 9 responses for ids 1..9
-    expect(responses.length).toBe(9);
+    // Notification id-less message must produce no response -> 10 responses for ids 1..10
+    expect(responses.length).toBe(10);
     expect(responses[0].result.serverInfo.name).toBe("project-pulse");
 
     const toolNames = responses[1].result.tools.map((t: { name: string }) => t.name);
@@ -178,17 +188,22 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
     expect(responses[8].result.isError).toBe(true);
     expect(responses[8].result.content[0].text).toContain("does-not-exist");
 
+    // Unknown tool name is protocol-level invalid params: JSON-RPC error, no result
+    expect(responses[9].error).toBeDefined();
+    expect(responses[9].error.code).toBe(-32602);
+    expect(responses[9].error.message).toContain("roadmap_nonexistent");
+    expect(responses[9].result).toBeUndefined();
+
     const roadmap = readFileSync(join(tempDir, "ROADMAP.md"), "utf8");
     expect(roadmap).toContain("## v0.1 Foundation (`v0.1`)");
     expect(roadmap).toContain("### MCP API (`mcp-api`)");
     expect(roadmap).toContain("All 6 MCP tools verified");
 
     // Updating an existing feature via roadmap_upsert_feature preserves prior pulse updates
-    const { createMcpHandler } = await import("../src/mcp");
     const handler = createMcpHandler(tempDir);
     const upsertResp = await handler({
       jsonrpc: "2.0",
-      id: 10,
+      id: 20,
       method: "tools/call",
       params: {
         name: "roadmap_upsert_feature",
@@ -200,11 +215,50 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
         },
       },
     });
-    const upsertPayload = JSON.parse(
-      ((upsertResp?.result as { content: Array<{ text: string }> }).content[0]!).text
-    );
+    const upsertResult = upsertResp?.result;
+    if (!upsertResult || typeof upsertResult !== "object" || !("content" in upsertResult)) {
+      throw new Error("roadmap_upsert_feature must return result.content");
+    }
+    const upsertContent = upsertResult.content as Array<{ text: string }>; // guarded above
+    const upsertPayload = JSON.parse(upsertContent[0]!.text);
     expect(upsertPayload.feature.title).toBe("MCP API v2");
     expect(upsertPayload.feature.updates.length).toBe(1);
     expect(upsertPayload.feature.updates[0].note).toBe("All 6 MCP tools verified");
+
+    // Handler-level: unknown tool name -> JSON-RPC invalid params, no result
+    const unknownToolResp = await handler({
+      jsonrpc: "2.0",
+      id: 21,
+      method: "tools/call",
+      params: { name: "roadmap_nonexistent", arguments: {} },
+    });
+    expect(unknownToolResp?.error).toBeDefined();
+    expect(unknownToolResp?.error?.code).toBe(-32602);
+    expect(unknownToolResp?.error?.message).toContain("roadmap_nonexistent");
+    expect(unknownToolResp?.result).toBeUndefined();
+
+    // Handler-level: missing tool name in params stays invalid params without a result
+    const missingNameResp = await handler({
+      jsonrpc: "2.0",
+      id: 22,
+      method: "tools/call",
+      params: { arguments: {} },
+    });
+    expect(missingNameResp?.error?.code).toBe(-32602);
+    expect(missingNameResp?.result).toBeUndefined();
+
+    // Handler-level: domain failure inside a known tool -> tool error, no JSON-RPC error
+    const knownToolFailResp = await handler({
+      jsonrpc: "2.0",
+      id: 23,
+      method: "tools/call",
+      params: { name: "roadmap_show_feature", arguments: { id: "does-not-exist" } },
+    });
+    expect(knownToolFailResp?.error).toBeUndefined();
+    const failResult = knownToolFailResp?.result;
+    if (!failResult || typeof failResult !== "object" || !("isError" in failResult)) {
+      throw new Error("known-tool failure must return result.isError");
+    }
+    expect(failResult.isError).toBe(true);
   });
 });
