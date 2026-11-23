@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli";
 import { buildChangelog, buildDigest, parseSinceSpec } from "../src/digest";
+import { serializeConfig } from "../src/frontmatter";
 import { RoadmapService } from "../src/store";
 
 let tempDir: string;
@@ -185,5 +186,116 @@ describe("v0.3 Activity Digest & Release Changelog", () => {
     // Combining <id> and --all rejects cleanly
     const conflict = await captureCli(["changelog", "v0.1", "--all"]);
     expect(conflict.code).toBe(1);
+  });
+
+  test("digest reads a roadmap nested inside the repo against its own unchanged HEAD (pp-f7m.8)", async () => {
+    git(["init"], tempDir);
+    git(["config", "user.name", "Tester"], tempDir);
+    git(["config", "user.email", "tester@example.com"], tempDir);
+
+    // Two nested projects reuse the feature id "f"; the superproject itself keeps a roadmap
+    // whose feature is also called "f". The repo root is the git root for all of them.
+    const svcRoot = new RoadmapService(tempDir);
+    svcRoot.init({ name: "Super Root" });
+    svcRoot.addFeature({ id: "f", title: "Root F", milestone: "backlog", status: "shipped" });
+
+    const dirA = join(tempDir, "pkg", "a");
+    const dirB = join(tempDir, "pkg", "b");
+    const svcA = new RoadmapService(dirA);
+    svcA.init({ name: "Nested A" });
+    svcA.upsertMilestone({ id: "m1", title: "M1", status: "active", order: 10 });
+    svcA.addFeature({
+      id: "f",
+      title: "Feature F",
+      milestone: "m1",
+      status: "in-progress",
+      ship_criteria: [{ id: "wire", text: "Wire it" }],
+    });
+    const svcB = new RoadmapService(dirB);
+    svcB.init({ name: "Nested B" });
+    svcB.addFeature({ id: "f", title: "Feature F in B", milestone: "backlog", status: "shipped" });
+
+    git(["add", "."], tempDir);
+    git(["commit", "-m", "baseline"], tempDir);
+    git(["tag", "nested-start"], tempDir);
+
+    // Unmodified working tree vs its own HEAD: zero activity, not "newly added".
+    const unchanged = buildDigest(dirA, { since: "HEAD" });
+    expect(unchanged.gitBaseline.available).toBe(true);
+    expect(unchanged.addedFeatures).toHaveLength(0);
+    expect(unchanged.summary.addedCount).toBe(0);
+    expect(unchanged.statusChanges).toHaveLength(0);
+    expect(unchanged.markdown).toContain("_No roadmap activity recorded in this window._");
+
+    // Change only A; the superproject's and B's identically-named features must not leak in.
+    svcA.updateFeature("f", { status: "shipped" });
+    svcA.checkFeatureCriterion("f", "wire", true);
+    svcA.addFeature({ id: "g", title: "Feature G", milestone: "m1", status: "planned" });
+    git(["add", "."], tempDir);
+    git(["commit", "-m", "progress in a"], tempDir);
+
+    const delta = buildDigest(dirA, { since: "nested-start" });
+    expect(delta.shippedFeatures.map((x) => x.id)).toEqual(["f"]);
+    expect(delta.addedFeatures.map((x) => x.id)).toEqual(["g"]);
+    expect(delta.completedCriteria.map((c) => c.featureId)).toEqual(["f"]);
+    expect(delta.markdown).not.toContain("Root F");
+    expect(delta.markdown).not.toContain("Feature F in B");
+  });
+
+  test("pp changelog --all includes the implicit default bucket and never duplicates it (pp-f7m.15)", async () => {
+    const svc = new RoadmapService(tempDir);
+    svc.init({ name: "Backlog Only" });
+    svc.addFeature({ id: "seed-a", title: "Seed A", milestone: "backlog", status: "shipped" });
+    svc.addFeature({ id: "seed-b", title: "Seed B", milestone: "backlog", status: "planned" });
+
+    // Backlog-only project: --all covers the configured implicit default bucket.
+    const allRes = buildChangelog(tempDir, { all: true });
+    expect(allRes.milestones.map((m) => m.milestone.id)).toEqual(["backlog"]);
+    expect(allRes.milestones[0]!.milestone.title).toBe("Backlog");
+    expect(allRes.markdown).toContain("## Backlog");
+    expect(allRes.markdown).toContain("### Shipped");
+    expect(allRes.markdown).toContain("**Seed A** (`seed-a`)");
+    expect(allRes.markdown).toContain("**Seed B** (`seed-b`) [planned]");
+
+    // CLI --json path stays well-formed.
+    const allCli = await captureCli(["changelog", "--all", "--json"]);
+    expect(allCli.code).toBe(0);
+    const allJson = JSON.parse(allCli.stdout);
+    expect(allJson.milestones.map((m: { milestone: { id: string } }) => m.milestone.id)).toEqual([
+      "backlog",
+    ]);
+
+    // The bucket id follows config.defaults.milestone, it is not a hardcoded "backlog". Fresh
+    // fixture with the custom bucket configured before its features exist — features may only
+    // reference declared milestones or the configured default bucket.
+    const customDir = join(tempDir, "custom-bucket");
+    const customSvc = new RoadmapService(customDir);
+    customSvc.init({ name: "Triage Only" });
+    const customCfg = customSvc.loadConfig();
+    customCfg.defaults.milestone = "triage";
+    writeFileSync(join(customDir, ".project-pulse", "config.yaml"), serializeConfig(customCfg));
+    customSvc.addFeature({ id: "seed-a", title: "Seed A", milestone: "triage", status: "shipped" });
+    customSvc.addFeature({ id: "seed-b", title: "Seed B", milestone: "triage", status: "planned" });
+    const triageRes = buildChangelog(customDir, { all: true });
+    expect(triageRes.milestones.map((m) => m.milestone.id)).toEqual(["triage"]);
+    expect(triageRes.markdown).toContain("## Backlog");
+    expect(triageRes.markdown).toContain("**Seed A** (`seed-a`)");
+    expect(triageRes.markdown).toContain("**Seed B** (`seed-b`) [planned]");
+
+    // Explicit milestones coexist with a featureful implicit bucket, which renders last.
+    customSvc.upsertMilestone({ id: "v1", title: "v1", status: "shipped", order: 5 });
+    const mixed = buildChangelog(customDir, { all: true });
+    expect(mixed.milestones.map((m) => m.milestone.id)).toEqual(["v1", "triage"]);
+    expect(mixed.markdown).toContain("## v1");
+    expect(mixed.markdown).toContain("## Backlog");
+    expect(mixed.markdown).toContain("**Seed A** (`seed-a`)");
+
+    // Once the default bucket exists as a real milestone, --all emits it exactly once.
+    customSvc.upsertMilestone({ id: "triage", title: "The Triage", status: "active", order: 10 });
+    const declared = buildChangelog(customDir, { all: true });
+    expect(declared.milestones.map((m) => m.milestone.id)).toEqual(["v1", "triage"]);
+    expect(declared.markdown).toContain("## The Triage");
+    expect(declared.markdown).toContain("**Seed A** (`seed-a`)");
+    expect(declared.markdown).not.toContain("## Backlog");
   });
 });

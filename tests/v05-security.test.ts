@@ -57,6 +57,43 @@ describe("v0.5 public release security hardening", () => {
     expect(statSync(fresh).mode & 0o777).toBe(0o600);
   });
 
+  test("writeFileAtomic survives a stricter umask: replaced files keep their exact bits", () => {
+    const oldUmask = process.umask(0o077);
+    try {
+      // Fixture writes are umask-filtered too (0644 asked, 0600 granted), so pin exact bits with chmod.
+      const roadmap = join(tempDir, "ROADMAP.md");
+      writeFileSync(roadmap, "# original roadmap\n");
+      chmodSync(roadmap, 0o644);
+
+      // Regression: rewriting an existing 0644 file under umask 077 used to collapse it to 0600,
+      // because the carried permissions were passed as a creation mode.
+      writeFileAtomic(roadmap, "# rewritten roadmap\n");
+      expect(readFileSync(roadmap, "utf8")).toBe("# rewritten roadmap\n");
+      expect(statSync(roadmap).mode & 0o777).toBe(0o644);
+
+      // Same through a symlink: the link is preserved and the target's bits survive replacement.
+      const target = join(tempDir, "AGENTS.md");
+      writeFileSync(target, "agents\n");
+      chmodSync(target, 0o644);
+      const link = join(tempDir, "linked-agents.md");
+      symlinkSync("AGENTS.md", link);
+      writeFileAtomic(link, "agents updated\n");
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(target, "utf8")).toBe("agents updated\n");
+      expect(statSync(target).mode & 0o777).toBe(0o644);
+
+      // New files still honor intentional restrictive defaults and the umask itself.
+      const secret = join(tempDir, "fresh-secret.json");
+      writeFileAtomic(secret, "{}\n", { mode: 0o600 });
+      expect(statSync(secret).mode & 0o777).toBe(0o600);
+      const byUmask = join(tempDir, "umask-default.json");
+      writeFileAtomic(byUmask, "{}\n");
+      expect(statSync(byUmask).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(oldUmask);
+    }
+  });
+
   test("pp init refuses to overwrite a hand-written ROADMAP.md unless forced", () => {
     const roadmapPath = join(tempDir, "ROADMAP.md");
     writeFileSync(roadmapPath, "# My hand-written roadmap\n");
@@ -100,6 +137,43 @@ describe("v0.5 public release security hardening", () => {
     if (home && home !== "/") {
       expect(redactPaths(`not initialized in ${home}/code/repo`)).toBe("not initialized in ~/code/repo");
     }
+  });
+
+  test("concurrent first launches adopt one persisted 0600 token", async () => {
+    const stateDir = join(tempDir, "race-state");
+    // Separate processes hit the same state dir exactly like simultaneous `pp view` launches.
+    const launcher = join(tempDir, "token-launcher.ts");
+    const httpSecurityPath = join(import.meta.dir, "../src/http-security.ts").replaceAll("\\", "/");
+    writeFileSync(
+      launcher,
+      `import { loadOrCreateAccessToken } from "${httpSecurityPath}";\n` +
+        `process.stdout.write(loadOrCreateAccessToken(process.argv[2]!));\n`
+    );
+    const procs = Array.from({ length: 6 }, () =>
+      Bun.spawn([process.execPath, "run", launcher, stateDir], { stdout: "pipe", stderr: "pipe" })
+    );
+    const tokens = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+    const exits = await Promise.all(procs.map((p) => p.exited));
+    expect(exits).toEqual(Array(6).fill(0));
+
+    // Every simultaneous launch ended up using the same token, the one persisted on disk.
+    const adopted = tokens.map((t) => t.trim());
+    const winner = adopted[0]!;
+    expect(new Set(adopted).size).toBe(1);
+    expect(winner).toMatch(/^[0-9a-f]{64}$/);
+    const tokenPath = join(stateDir, "access-token");
+    expect(readFileSync(tokenPath, "utf8").trim()).toBe(winner);
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    expect(statSync(stateDir).mode & 0o777).toBe(0o700);
+
+    // A restart keeps working off the same persisted token...
+    expect(loadOrCreateAccessToken(stateDir)).toBe(winner);
+    // ...and a corrupt file left by an older non-atomic writer is replaced atomically, 0600.
+    writeFileSync(tokenPath, "trunc");
+    const recovered = loadOrCreateAccessToken(stateDir);
+    expect(recovered).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(tokenPath, "utf8").trim()).toBe(recovered);
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
   });
 
   test("MCP server answers malformed JSON-RPC messages with -32600 and keeps serving", async () => {

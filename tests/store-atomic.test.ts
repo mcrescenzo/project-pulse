@@ -15,6 +15,8 @@ import { STORE_LOCK_FILE_NAME, withStoreLock } from "../src/store-lock";
 
 const GENERATED_ROADMAP_HEADER = `${ROADMAP_GENERATED_MARKER} Do not edit manually. -->`;
 const NOTE_COUNT = 12;
+// Allow each child its 10s SQLite contention deadline plus process startup and teardown.
+const CONCURRENT_CLI_TIMEOUT_MS = 20_000;
 
 let tempDir: string;
 
@@ -128,7 +130,7 @@ describe("Store atomicity: cross-process locking, init guard, case collisions", 
 
     const check = service.check();
     expect(check.ok, JSON.stringify(check.errors)).toBe(true);
-  });
+  }, CONCURRENT_CLI_TIMEOUT_MS);
 
   test("mixed concurrent mutations across all shared paths keep the store consistent", async () => {
     const service = initRepo();
@@ -175,7 +177,7 @@ describe("Store atomicity: cross-process locking, init guard, case collisions", 
 
     const check = service.check();
     expect(check.ok, JSON.stringify(check.errors)).toBe(true);
-  });
+  }, CONCURRENT_CLI_TIMEOUT_MS);
 
   test("a live foreign holder yields a retryable conflict; a killed holder recovers automatically", async () => {
     const service = initRepo();

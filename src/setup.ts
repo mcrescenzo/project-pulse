@@ -194,27 +194,36 @@ function mergeMcpJson(
   }
 
   const servers = (serversRaw ?? {}) as Record<string, unknown>;
-  const existingEntry = servers["project-pulse"] as Record<string, unknown> | undefined;
   const desiredEntry = snippet.mcpServers["project-pulse"];
+  // Only `command` and `args` are owned by setup; user-added keys on the entry (env, disabled, …)
+  // are preserved verbatim and never influence equality.
+  const rawEntry = servers["project-pulse"];
+  const existingEntry =
+    rawEntry !== null && typeof rawEntry === "object" && !Array.isArray(rawEntry)
+      ? (rawEntry as Record<string, unknown>)
+      : undefined;
   const alreadyMatches =
-    Boolean(existingEntry) &&
-    typeof existingEntry === "object" &&
-    !Array.isArray(existingEntry) &&
+    existingEntry !== undefined &&
     existingEntry.command === desiredEntry.command &&
     Array.isArray(existingEntry.args) &&
     existingEntry.args.length === desiredEntry.args.length &&
-    existingEntry.args.every((v, i) => v === desiredEntry.args[i]) &&
-    Object.keys(existingEntry).length === 2;
+    existingEntry.args.every((v, i) => v === desiredEntry.args[i]);
 
   if (alreadyMatches) {
     return { content: existingRaw, action: "unchanged" };
   }
 
+  // Update the owned fields in place, keeping the entry's other keys and their order; a
+  // non-object entry (or absence) is replaced outright since there is nothing to preserve.
+  const mergedEntry =
+    existingEntry !== undefined
+      ? { ...existingEntry, command: desiredEntry.command, args: desiredEntry.args }
+      : desiredEntry;
   const merged = {
     ...rootObj,
     mcpServers: {
       ...servers,
-      "project-pulse": desiredEntry,
+      "project-pulse": mergedEntry,
     },
   };
   return {
