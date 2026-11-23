@@ -259,4 +259,91 @@ sys.exit(rc)
     });
     expect(res.exitCode).toBe(0);
   });
+
+  test("health modal out-ranks open drawer: Close click dismisses only Health, covered status/criteria untouched on disk", () => {
+    const svc = seedProject(tempDir);
+    const session = new VirtualDrawerSession(140, 42); // split drawer overlaps the centered health modal
+    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
+    ctrl.start();
+
+    try {
+      session.click(ctrl, "card-tui-drawer");
+      expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
+      const roadmapBefore = readFileSync(join(tempDir, "ROADMAP.md"), "utf8");
+
+      session.click(ctrl, "health-toggle");
+      expect(ctrl.getState().healthPanelOpen).toBe(true);
+
+      // The Health Close pill paints over drawer controls; the covered drawer pill must lose the hitTest
+      const closePill = ctrl.getBuffer().getHitRegions().find((r) => r.id === "health-close")!;
+      expect(closePill).toBeDefined();
+      expect(ctrl.getBuffer().hitTest(closePill.x, closePill.y)?.id).toBe("health-close");
+
+      // Real click on the Close pill at its rendered coordinates
+      ctrl.handleEvent({ type: "mouse", action: "down", button: "left", x: closePill.x, y: closePill.y });
+      ctrl.handleEvent({ type: "mouse", action: "up", button: "left", x: closePill.x, y: closePill.y });
+      expect(ctrl.getState().healthPanelOpen).toBe(false);
+      expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
+
+      // A covered criterion is equally protected: backdrop click over it dismisses Health without toggling
+      session.click(ctrl, "health-toggle");
+      expect(ctrl.getState().healthPanelOpen).toBe(true);
+      const criterion = ctrl
+        .getBuffer()
+        .getHitRegions()
+        .find((r) => r.id === "drawer-criterion-toggle-criteria")!;
+      expect(criterion).toBeDefined();
+      ctrl.handleEvent({ type: "mouse", action: "down", button: "left", x: criterion.x, y: criterion.y });
+      ctrl.handleEvent({ type: "mouse", action: "up", button: "left", x: criterion.x, y: criterion.y });
+      expect(ctrl.getState().healthPanelOpen).toBe(false);
+
+      // Feature status and criteria unchanged on disk
+      const feature = svc.load().features.find((f) => f.id === "tui-drawer")!;
+      expect(feature.status).toBe("in-progress");
+      expect(feature.ship_criteria.every((c) => !c.done)).toBe(true);
+      expect(feature.updates ?? []).toEqual([]);
+      expect(readFileSync(join(tempDir, "ROADMAP.md"), "utf8")).toBe(roadmapBefore);
+    } finally {
+      ctrl.stop();
+    }
+  });
+
+  test("filter picker out-ranks open drawer: click over covered drawer control dismisses picker without mutating disk", () => {
+    const svc = seedProject(tempDir);
+    const session = new VirtualDrawerSession(140, 42);
+    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
+    ctrl.start();
+
+    try {
+      session.click(ctrl, "card-tui-drawer");
+      expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
+
+      // Status filter dropdown opens above the split drawer
+      session.click(ctrl, "picker-status");
+      expect(ctrl.getState().openPicker?.kind).toBe("status");
+
+      // Clicking where a covered drawer status pill sits must dismiss the picker only —
+      // never leak into the covered control or persist a status change
+      const coveredPill = ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-status-shipped")!;
+      expect(coveredPill).toBeDefined();
+      ctrl.handleEvent({ type: "mouse", action: "down", button: "left", x: coveredPill.x, y: coveredPill.y });
+      ctrl.handleEvent({ type: "mouse", action: "up", button: "left", x: coveredPill.x, y: coveredPill.y });
+      expect(ctrl.getState().openPicker).toBeNull();
+      expect(ctrl.getState().statusFilter).toBe("");
+      expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
+      expect(svc.load().features.find((f) => f.id === "tui-drawer")?.status).toBe("in-progress");
+
+      // The picker itself remains fully usable above the drawer
+      session.click(ctrl, "picker-status");
+      const firstOpt = ctrl.getBuffer().getHitRegions().find((r) => r.id === "picker-opt-0")!;
+      expect(firstOpt).toBeDefined();
+      // HitRegion.data is set in-process by renderFloatingPicker as { kind, value }
+      const opt = firstOpt.data as { kind: string; value: string };
+      session.click(ctrl, "picker-opt-0");
+      expect(ctrl.getState().openPicker).toBeNull();
+      expect(ctrl.getState().statusFilter).toBe(opt.value);
+    } finally {
+      ctrl.stop();
+    }
+  });
 });
