@@ -116,12 +116,12 @@ Provides the conflict-free `.project-pulse/` storage layer and deterministic `RO
 ## Local dashboard and hub
 
 - `pp view` checks `http://127.0.0.1:4310/api/hub/health`.
-  - If a Project Pulse hub answers, and its pid and port match `<state>/hub.json`, `pp view` registers the repo with the hub token from that file and exits.
+  - If a Project Pulse hub answers, and its pid and port match the port's hub lock (`<state>/hub.json` for the default port, `<state>/hub.<port>.json` otherwise), `pp view` registers the repo with the hub token from that file and exits.
   - Otherwise it starts a new hub.
   - `pp view --standalone` runs an isolated single-project server instead.
 - State lives in `~/.config/project-pulse/` (override with `PROJECT_PULSE_HOME`). The directory is mode 0700:
-  - `hub.json`: pid, port, per-launch hub token (0600)
-  - `projects.json`: registered repo paths (0600)
+  - `hub.json`: pid, port, per-launch hub token (0600). Discovery is port-scoped: hubs on non-default ports use `hub.<port>.json` instead, so two hubs sharing the state directory never overwrite each other's discovery record, and a hub started with dynamic port 0 persists under its actual bound port.
+  - `projects.json`: registered repo paths (0600). Scoped the same way (`projects.<port>.json` for non-default ports), so each hub's membership stays durable and a save on one hub never erases another hub's registrations.
   - `access-token`: persistent dashboard access token (0600)
 - Browser access: `pp view` opens `…?t=<access-token>`. The server swaps the token for an `HttpOnly; SameSite=Strict` cookie and redirects to the clean URL. API clients can send `X-PP-Access-Token` instead.
 - Every route checks the `Host` header. Mutations also go through the CSRF checks in `validateMutationRequest`.
