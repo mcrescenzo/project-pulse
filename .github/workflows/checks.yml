@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   bun:
-    name: Typecheck, test & roadmap check (Bun)
+    name: Typecheck, test & roadmap check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
