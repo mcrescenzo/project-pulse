@@ -94,27 +94,25 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-tgz-${{ github.sha }}
-          path: dist-pack
+          path: ${{ runner.temp }}/npm-artifact
 
-      - name: Verify artifact digest, name, and version
+      - name: Verify and publish the exact tarball with provenance
         env:
           EXPECTED_SHA512: ${{ needs.checks.outputs.sha512 }}
           FILENAME: ${{ needs.validate.outputs.filename }}
+          TARBALL: ${{ runner.temp }}/npm-artifact/${{ needs.validate.outputs.filename }}
           EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          test -f "dist-pack/$FILENAME"
-          ACTUAL="$(sha512sum "dist-pack/$FILENAME" | cut -d' ' -f1)"
+          test -f "$TARBALL"
+          ACTUAL="$(sha512sum "$TARBALL" | cut -d' ' -f1)"
           test "$ACTUAL" = "$EXPECTED_SHA512" || { echo "Digest mismatch: $ACTUAL" >&2; exit 1; }
-          tar -xOf "dist-pack/$FILENAME" package/package.json | jq -e \
+          tar -xOf "$TARBALL" package/package.json | jq -e \
             --arg v "$EXPECTED_VERSION" '.name == "project-pulse" and .version == $v' > /dev/null
           echo "Verified $FILENAME (sha512 $ACTUAL) for project-pulse@$EXPECTED_VERSION"
 
-      - name: Publish the exact tarball with provenance
-        env:
-          FILENAME: ${{ needs.validate.outputs.filename }}
-        run: |
-          npm publish "dist-pack/$FILENAME" \
+          # The absolute path prevents npm from interpreting a slash-delimited spec as GitHub shorthand.
+          npm publish "$TARBALL" \
             --registry=https://registry.npmjs.org \
             --access public \
             --tag latest \
