@@ -153,6 +153,8 @@ Node.js 24+ and Bun runtime portability, bundled CLI packaging, and public npm r
   - [x] Builds dist/cli.js with #!/usr/bin/env node and clean package.json bin, files, and engines fields
   - [x] Verifies npm pack tarball contents exclude repo-only scratch/test artifacts
   - [x] Passes clean-environment smoke tests for npx, npm i -g, and bunx installs
-
-### In Progress / Planned
-- **Public NPM Registry Publish & Release Automation** (`npm-registry-publish`) [in-progress]
+- **Public NPM Registry Publish & Release Automation** (`npm-registry-publish`) — *Release*
+  - Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
+  - [x] Confirms npm package name availability and configures tag-driven publish workflow with npm provenance
+  - [x] Publishes v1.0 release to npmjs.com linked to the public GitHub repository
+  - [x] Verifies single-command npx project-pulse and npm i -g project-pulse on fresh Node.js and Bun environments

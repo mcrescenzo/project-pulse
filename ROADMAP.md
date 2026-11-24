@@ -312,7 +312,7 @@ Publishes the audited repository to GitHub with clean metadata, branch protectio
 
 ## v1.0 — NPM Package Distribution (`v1.0`)
 
-**Status:** `active` | **Progress:** 2/3 features shipped
+**Status:** `shipped` | **Progress:** 3/3 features shipped
 
 Node.js 24+ and Bun runtime portability, bundled CLI packaging, and public npm release for single-command installation.
 
@@ -344,13 +344,13 @@ Produces a clean bundled dist/cli.js package with Node shebang and verifies loca
 
 ### Public NPM Registry Publish & Release Automation (`npm-registry-publish`)
 
-**Status:** `in-progress` | **Area:** Release | **Depends on:** `npm-package-build`, `public-repo-launch`
+**Status:** `shipped` | **Area:** Release | **Depends on:** `npm-package-build`, `public-repo-launch`
 
 Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
 
-**Ship Criteria (1/3):**
+**Ship Criteria (3/3):**
 - [x] Confirms npm package name availability and configures tag-driven publish workflow with npm provenance
-- [ ] Publishes v1.0 release to npmjs.com linked to the public GitHub repository
-- [ ] Verifies single-command npx project-pulse and npm i -g project-pulse on fresh Node.js and Bun environments
+- [x] Publishes v1.0 release to npmjs.com linked to the public GitHub repository
+- [x] Verifies single-command npx project-pulse and npm i -g project-pulse on fresh Node.js and Bun environments
 
-> **Latest Pulse (2026-11-24T15:58:34.301Z):** Stable publication attempt (2026-11-24): unchanged tag v1.0.0 → d24b75a64ffddb485af13e846e4f14d09c77d983. GitHub run 45428240758 (attempt 2) passed the release gates and received maintainer approval, but npm interpreted the relative tarball path as a GitHub Git spec and failed before upload. Registry readback: 1.0.0 absent; latest and next both 1.0.0-rc.1. PR #16 (f7865b1) fixed the absolute tarball path; the offline publish dry run passed in CI run 45430900209. GitHub release protections remain configured. Revalidate the npm trusted-publisher binding before the next release; npm expires new bindings after two days without a successful publish. Maintainer chose workflow repair only: no new version or tag, and stable publish, provenance, and clean registry install proofs remain open.
+> **Latest Pulse (2026-11-24T16:42:52.509Z):** Stable npm release verified (2026-11-24): project-pulse@1.0.1 published via GitHub Actions run 45438992543 from v1.0.1 at 0e34e7a20efe8d92076b47e27a61f9508568a07b. Public registry latest=1.0.1, next=1.0.0-rc.1. Downloaded tarball matched CI and local artifact byte for byte; SRI sha512-yPaiDsBHP0v6cucU0Y8GAOMpuZX+gxJQyWafMjnXSUS8LjhR9AGXWNqcMzcnh/OBwBJuv0K3VgocaCtAN7NsqQ==. npm audit signatures verified npm signatures and SLSA provenance; the subject digest matched the tarball and the source matched that tag and commit (Sigstore log index 4082487925). Both pinned and unversioned registry installs passed on Node 24.0.0 and 24.22.2 without Bun, and Bun 1.3.0 without Node. Both CLI aliases, persisted note readback, roadmap check, and MCP initialize passed. The stable release is 1.0.1; v1.0.0 was not moved.
