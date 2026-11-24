@@ -70,7 +70,9 @@ await buildEntry("src/cli.ts", DIST_DIR, "cli.js", ["bun:sqlite", "node:sqlite"]
 const cliPath = join(DIST_DIR, "cli.js");
 const bundled = readFileSync(cliPath, "utf8");
 const withoutShebang = bundled.startsWith("#!") ? bundled.slice(bundled.indexOf("\n") + 1) : bundled;
-writeFileSync(cliPath, SHEBANG + withoutShebang);
+// The Bun source shebang makes the bundler emit this pragma even on a Node target.
+// It tells Bun to read the bundle as Latin-1 despite its UTF-8 literals (oven-sh/bun#25767).
+writeFileSync(cliPath, SHEBANG + withoutShebang.replace(/^\/\/ @bun\r?\n/, ""));
 chmodSync(cliPath, 0o755);
 
 // Third-party notices: version + license + license text per bundled package.
