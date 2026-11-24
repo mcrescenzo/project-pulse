@@ -3,7 +3,7 @@ id: npm-registry-publish
 title: Public NPM Registry Publish & Release Automation
 milestone: v1.0
 order: 30
-status: in-progress
+status: shipped
 area: Release
 depends_on:
   - npm-package-build
@@ -16,11 +16,11 @@ ship_criteria:
     done: true
   - id: publishes-v1-0-release
     text: Publishes v1.0 release to npmjs.com linked to the public GitHub repository
-    done: false
+    done: true
   - id: verifies-single-command-npx
     text: Verifies single-command npx project-pulse and npm i -g project-pulse on
       fresh Node.js and Bun environments
-    done: false
+    done: true
 updates:
   - at: 2026-11-23T19:41:38.725Z
     note: "Publish-prep evidence (harness: omp, machine: ws, profile: default;
@@ -77,5 +77,19 @@ updates:
       publish. Maintainer chose workflow repair only: no new version or tag, and
       stable publish, provenance, and clean registry install proofs remain
       open."
+  - at: 2026-11-24T16:42:52.509Z
+    note: "Stable npm release verified (2026-11-24): project-pulse@1.0.1 published
+      via GitHub Actions run 45438992543 from v1.0.1 at
+      0e34e7a20efe8d92076b47e27a61f9508568a07b. Public registry latest=1.0.1,
+      next=1.0.0-rc.1. Downloaded tarball matched CI and local artifact byte for
+      byte; SRI
+      sha512-yPaiDsBHP0v6cucU0Y8GAOMpuZX+gxJQyWafMjnXSUS8LjhR9AGXWNqcMzcnh/OBwB\
+      Juv0K3VgocaCtAN7NsqQ==. npm audit signatures verified npm signatures and
+      SLSA provenance; the subject digest matched the tarball and the source
+      matched that tag and commit (Sigstore log index 4082487925). Both pinned
+      and unversioned registry installs passed on Node 24.0.0 and 24.22.2
+      without Bun, and Bun 1.3.0 without Node. Both CLI aliases, persisted note
+      readback, roadmap check, and MCP initialize passed. The stable release is
+      1.0.1; v1.0.0 was not moved."
 ---
 Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
