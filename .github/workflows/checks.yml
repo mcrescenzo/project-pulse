@@ -216,6 +216,19 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
+      - name: Dry-run npm publish against the built tarball
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          INTEGRITY="$(jq -er '.[0].integrity' "$RUNNER_TEMP/npm-pack.json")"
+          npm publish "$TARBALL" \
+            --dry-run --offline --cache "$RUNNER_TEMP/npm-publish-dry-run-cache" --json \
+            --registry=https://registry.npmjs.org --access public --tag latest --provenance --ignore-scripts \
+            | jq -e --arg version "$VERSION" --arg integrity "$INTEGRITY" \
+                '."project-pulse" | .name == "project-pulse" and .version == $version and .integrity == $integrity'
+
       - name: Install and exercise the tarball on Node LTS without Bun
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}

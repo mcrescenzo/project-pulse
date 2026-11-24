@@ -38,7 +38,7 @@ Commit messages follow a light conventional style, e.g. `feat(tui): …`, `fix(h
 
 ## Stable npm releases
 
-PR CI and the `Publish` workflow run the same runtime matrix and packed npm install checks. Merge the version bump with green CI; do not publish from a local checkout.
+PR CI and the `Publish` workflow run the same runtime matrix, packed npm install checks, and offline publish dry run. Merge the version bump with green CI; do not publish from a local checkout.
 
 Before pushing `vX.Y.Z`, verify that it matches `package.json` on `main`, release tag creation is restricted, and the `npm-release` environment requires maintainer approval. The npm trusted publisher must point to `mcrescenzo/project-pulse`, `publish.yml`, and `npm-release`.
 
