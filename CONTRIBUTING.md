@@ -36,6 +36,14 @@ The PTY smoke test needs `python3` and is skipped without it.
 
 Commit messages follow a light conventional style, e.g. `feat(tui): …`, `fix(hub): …`, `docs: …`, `roadmap: …`.
 
+## Stable npm releases
+
+PR CI and the `Publish` workflow run the same runtime matrix and packed npm install checks. Merge the version bump with green CI; do not publish from a local checkout.
+
+Before pushing `vX.Y.Z`, verify that it matches `package.json` on `main`, release tag creation is restricted, and the `npm-release` environment requires maintainer approval. The npm trusted publisher must point to `mcrescenzo/project-pulse`, `publish.yml`, and `npm-release`.
+
+Review the tested tarball's SHA-512 in the tag run before approving publication. Verify the registry's `latest` version, integrity, provenance, and clean installs before marking the release shipped in the roadmap.
+
 ## The project's own roadmap
 
 This repository dogfoods Project Pulse: `ROADMAP.md` is generated from `.project-pulse/`.
