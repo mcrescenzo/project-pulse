@@ -1,9 +1,11 @@
 # Project Pulse — Release Notes
 
-## Unreleased
+## v2.0.0 — Unified onboarding
 
 - `pp init` replaces `pp setup`. It previews roadmap initialization and lets you opt into `AGENTS.md`, a repo-local skill, and `.mcp.json` independently. Scripts can use `--non-interactive` or `--json` with the `--with-*` flags.
 - Agent guidance includes the Beads workflow only in repos with a supported local Beads marker and an enabled integration.
+
+**Migration:** Replace `pp setup --mcp .mcp.json --with-skill` with `pp init --non-interactive --with-agents --with-mcp --with-skill`. Omit any `--with-*` flags you don't need. The old `setup` command and its custom output path flags are no longer supported.
 
 ## v0.1 — Core Foundation (2026-Q4)
 
