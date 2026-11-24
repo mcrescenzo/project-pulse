@@ -140,11 +140,19 @@ Security and privacy audit, open-source documentation and CI, and public GitHub 
 
 ## v1.0 — NPM Package Distribution
 
-Node.js 20+ runtime portability, bundled CLI packaging, and public npm release for single-command installation.
+Node.js 24+ and Bun runtime portability, bundled CLI packaging, and public npm release for single-command installation.
 
-_No features marked shipped in this milestone yet._
+### Shipped
+- **Node.js 24+ & Bun Dual-Runtime Portability** (`node-runtime-portability`) — *Core*
+  - Replaces Bun-only runtime calls (Bun.YAML, Bun.serve, Bun.spawn/stdin) with portable Node.js 24+ APIs and a lightweight YAML library while retaining full Bun support.
+  - [x] Preserves fast startup and clean zero-bloat dependency footprint
+  - [x] Replaces Bun.YAML, Bun.serve, and Bun.spawn/Bun.stdin with portable Node.js 24+ APIs and a lightweight YAML parser
+  - [x] Passes full CLI, MCP, hub server, and Beads test suites under both Node.js 24+ and Bun
+- **NPM Package Build & Clean-Install Verification** (`npm-package-build`) — *Release*
+  - Produces a clean bundled dist/cli.js package with Node shebang and verifies local npm pack installs across Node.js and Bun.
+  - [x] Builds dist/cli.js with #!/usr/bin/env node and clean package.json bin, files, and engines fields
+  - [x] Verifies npm pack tarball contents exclude repo-only scratch/test artifacts
+  - [x] Passes clean-environment smoke tests for npx, npm i -g, and bunx installs
 
 ### In Progress / Planned
-- **Node.js 20+ & Bun Dual-Runtime Portability** (`node-runtime-portability`) [planned]
-- **NPM Package Build & Clean-Install Verification** (`npm-package-build`) [planned]
-- **Public NPM Registry Publish & Release Automation** (`npm-registry-publish`) [planned]
+- **Public NPM Registry Publish & Release Automation** (`npm-registry-publish`) [in-progress]
