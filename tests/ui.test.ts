@@ -85,7 +85,15 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await page.waitForSelector("#drawer-backdrop.open");
 
       // 2. Clicking criterion text (via wrapping <label>) persists to disk and ROADMAP.md
-      await page.locator(".criteria-item", { hasText: "Label click toggles checkbox" }).click();
+      // The browser checks the box before the server acknowledges the write.
+      const [savedCriterion] = await Promise.all([
+        page.waitForResponse((response) =>
+          response.request().method() === "POST" &&
+          new URL(response.url()).pathname === "/api/features/ui-feature/pulse"
+        ),
+        page.locator(".criteria-item", { hasText: "Label click toggles checkbox" }).click(),
+      ]);
+      expect(savedCriterion.ok()).toBe(true);
       await page.waitForFunction(() => {
         const boxes = document.querySelectorAll('#drawer input[data-criterion-id]');
         return boxes.length === 2 && (boxes[1] as HTMLInputElement).checked;
