@@ -64,5 +64,18 @@ updates:
       (fresh installs 404 during that window). Criteria publishes-v1-0-release
       and verifies-single-command-npx remain OPEN until the stable v1.0.0
       tag-driven release with provenance is published and verified."
+  - at: 2026-11-24T15:58:34.301Z
+    note: "Stable publication attempt (2026-11-24): unchanged tag v1.0.0 →
+      d24b75a64ffddb485af13e846e4f14d09c77d983. GitHub run 45428240758 (attempt
+      2) passed the release gates and received maintainer approval, but npm
+      interpreted the relative tarball path as a GitHub Git spec and failed
+      before upload. Registry readback: 1.0.0 absent; latest and next both
+      1.0.0-rc.1. PR #16 (f7865b1) fixed the absolute tarball path; the offline
+      publish dry run passed in CI run 45430900209. GitHub release protections
+      remain configured. Revalidate the npm trusted-publisher binding before the
+      next release; npm expires new bindings after two days without a successful
+      publish. Maintainer chose workflow repair only: no new version or tag, and
+      stable publish, provenance, and clean registry install proofs remain
+      open."
 ---
 Publishes project-pulse to npmjs.com with automated tag-driven releases, provenance attestation, and verified single-command installation.
