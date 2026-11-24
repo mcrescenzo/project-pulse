@@ -101,7 +101,7 @@ Provides the conflict-free `.project-pulse/` storage layer and deterministic `RO
 | `src/validator.ts` | Schema checks, the milestone→feature hierarchy, dependency-cycle detection, the ship-criteria guardrail, and `ROADMAP.md` sync checks. |
 | `src/renderer.ts` | Deterministic `ROADMAP.md` compiler. |
 | `src/frontmatter.ts` | YAML frontmatter parsing and serialization (`Bun.YAML`). |
-| `src/cli.ts` | `pp` / `project-pulse` entry point, argument parsing, and per-command flag allowlists. |
+| `src/cli.ts`, `src/cli-main.ts` | `pp` / `project-pulse` entry point, argument parsing, command dispatch, and the terminal `init` walkthrough. |
 | `src/mcp.ts` | Stdio JSON-RPC MCP server. Tools: `roadmap_summary`, `roadmap_show_feature`, `roadmap_upsert_milestone`, `roadmap_upsert_feature`, `roadmap_log_pulse`, `roadmap_check`. |
 | `src/beads.ts` | Optional read-only Beads resolver. Batches `bd --readonly show --json -- <ids>` calls, caches results, and detects drift between feature status and issue state. |
 | `src/view.ts` | Per-project "slot": file watcher, SSE live reload, JSON API, quick-action handler. Also the standalone dashboard server. |
@@ -110,7 +110,7 @@ Provides the conflict-free `.project-pulse/` storage layer and deterministic `RO
 | `src/dashboard-html.ts` | Self-contained dashboard and portfolio HTML/JS: cards, dependency graph, status board, and detail drawer. |
 | `src/export.ts` | `pp export --html`: a zero-network static snapshot (inline data, CSP-locked). |
 | `src/digest.ts` | `pp digest` (git- or time-based activity diff) and `pp changelog` (release notes per milestone). |
-| `src/setup.ts` | `pp setup`: idempotent `AGENTS.md` block, MCP config merge, optional agent skill file. |
+| `src/setup.ts` | Prepares selected `pp init` writes, validates repo-local paths, and rechecks the preview before applying roadmap and agent-file changes. Writes are atomic per file, not across files. |
 | `src/tui/*` | Dependency-free terminal UI: cell-buffer diff renderer (`screen.ts`), key and SGR mouse decoder (`input.ts`), views, waterfall graph, and drawer. |
 
 ## Local dashboard and hub

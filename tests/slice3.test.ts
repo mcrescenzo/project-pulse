@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMcpHandler } from "../src/mcp";
@@ -29,6 +29,7 @@ describe("Slice 3: Stdio MCP Server (pp mcp) & Agent Onboarding Snippet", () => 
     expect(code).toBe(0);
     expect(stdout).toContain("Never edit `ROADMAP.md`");
     expect(stdout).toContain("pp summary");
+    expect(existsSync(join(tempDir, "AGENTS.md"))).toBe(false);
   });
 
   test("pp mcp handles initialize, tools/list, and all 6 tools/call operations over stdio JSON-RPC", async () => {

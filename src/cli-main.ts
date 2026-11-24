@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import pkg from "../package.json";
 import { CliBeadsClient, type BeadsClient } from "./beads";
 import { buildChangelog, buildDigest } from "./digest";
@@ -7,12 +8,11 @@ import { exportStaticHtml } from "./export";
 import { isSafeLocalUrl, loadOrCreateAccessToken } from "./http-security";
 import { joinOrStartHub, resolveHubStateDir } from "./hub";
 import { runMcpServer } from "./mcp";
-import { runRepoSetup } from "./setup";
+import { DEFAULT_SKILL_REL_PATH, prepareRepoInit, type SetupAction } from "./setup";
 import {
   findProjectRoot,
   formatFeatureText,
   formatSummaryText,
-  getAgentsSnippet,
   RoadmapService,
 } from "./store";
 import { runTui } from "./tui/app";
@@ -47,9 +47,6 @@ const VALUE_FLAGS = new Set([
   "port",
   "out",
   "since",
-  "agents-md",
-  "mcp",
-  "skill",
 ]);
 
 const BOOLEAN_FLAGS = new Set([
@@ -67,8 +64,10 @@ const BOOLEAN_FLAGS = new Set([
   "tui",
   "html",
   "all",
+  "with-agents",
+  "with-mcp",
   "with-skill",
-  "init",
+  "non-interactive",
   "dry-run",
 ]);
 
@@ -76,7 +75,10 @@ const GLOBAL_VALUE_FLAGS = new Set(["root"]);
 const GLOBAL_BOOLEAN_FLAGS = new Set(["help", "version", "json"]);
 
 const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[] }> = {
-  init: { value: ["name", "summary"], boolean: ["agents-snippet", "force"] },
+  init: {
+    value: ["name", "summary"],
+    boolean: ["agents-snippet", "force", "with-agents", "with-mcp", "with-skill", "non-interactive", "dry-run"],
+  },
   summary: { value: ["milestone", "status"], boolean: [] },
   show: { value: [], boolean: ["beads", "no-beads"] },
   "milestone add": { value: ["title", "order", "status", "target", "description"], boolean: [] },
@@ -121,7 +123,6 @@ const COMMAND_FLAG_ALLOWLIST: Record<string, { value: string[]; boolean: string[
   export: { value: ["out"], boolean: ["html", "beads"] },
   digest: { value: ["since", "milestone"], boolean: [] },
   changelog: { value: [], boolean: ["all"] },
-  setup: { value: ["agents-md", "mcp", "skill"], boolean: ["with-skill", "init", "dry-run"] },
   mcp: { value: [], boolean: [] },
 };
 
@@ -255,6 +256,7 @@ function printHelp(): void {
 Usage:
   pp                                  Run summary if initialized, otherwise show help
   pp init [--name <name>] [--summary <text>] [--agents-snippet] [--force] [--json]
+          [--with-agents] [--with-mcp] [--with-skill] [--non-interactive] [--dry-run]
   pp summary [--milestone <id>] [--status <s>] [--json]
   pp show <feature-id> [--beads | --no-beads] [--json]
   pp milestone add <id> --title <title> [--order <n>] [--status <s>] [--target <str>] [--description <md>] [--json]
@@ -272,12 +274,11 @@ Usage:
   pp export --html [--out <path|->] [--beads] [--json]
   pp digest [--since <date|7d|git-ref>] [--milestone <id>] [--json]
   pp changelog [<milestone-id>] [--all] [--json]
-  pp setup [--agents-md <path>] [--mcp <path>] [--skill <path>] [--with-skill] [--init] [--dry-run] [--json]
   pp mcp
   pp --help | --version
 
 Options:
-  --root <dir>   Target repository root (defaults to nearest parent with .project-pulse/)
+  --root <dir>   Target directory (init defaults to cwd; other commands look for .project-pulse/)
   --json         Output structured JSON (not on 'pp view' or 'pp mcp': interactive servers)
   -h, --help     Show help
   -v, --version  Show version
@@ -290,6 +291,124 @@ export interface CliDependencies {
   beadsClient?: BeadsClient;
   cwd?: string;
   isTty?: boolean;
+}
+
+function printInitActions(root: string, actions: SetupAction[]): void {
+  for (const item of actions) {
+    console.log(`[${item.action}] ${relative(root, item.path)} — ${item.detail}`);
+  }
+}
+
+async function runInit(
+  service: RoadmapService,
+  parsed: ParsedArgs,
+  jsonMode: boolean,
+  hasTty: boolean
+): Promise<number> {
+  let name = getFlag(parsed, "name");
+  let summary = getFlag(parsed, "summary");
+  const force = parsed.booleans.has("force");
+  const includeSnippet = parsed.booleans.has("agents-snippet");
+  const dryRun = parsed.booleans.has("dry-run");
+  let withAgents = parsed.booleans.has("with-agents");
+  let withMcp = parsed.booleans.has("with-mcp");
+  let withSkill = parsed.booleans.has("with-skill");
+  const explicitExtras = withAgents || withMcp || withSkill;
+  const interactive = hasTty && !jsonMode && !includeSnippet && !parsed.booleans.has("non-interactive");
+  const initialized = service.isInitialized();
+  const writeRoadmap = !initialized || name !== undefined || summary !== undefined || force ||
+    (!interactive && !explicitExtras);
+
+  const rl = interactive ? createInterface({ input: process.stdin, output: process.stdout, terminal: true }) : undefined;
+  const lines = rl?.[Symbol.asyncIterator]();
+  const cancelled = Symbol("init cancelled");
+  let closed = false;
+  let interrupted = false;
+  rl?.once("close", () => { closed = true; });
+  rl?.once("SIGINT", () => {
+    interrupted = true;
+    rl.close();
+  });
+
+  async function answer(prompt: string): Promise<string> {
+    if (closed) throw cancelled;
+    rl!.setPrompt(`${prompt} `);
+    rl!.prompt();
+    const line = await lines!.next();
+    if (closed || line.done) throw cancelled;
+    return line.value.trim();
+  }
+
+  async function yesNo(prompt: string, defaultYes: boolean): Promise<boolean> {
+    for (;;) {
+      const reply = (await answer(`${prompt} ${defaultYes ? "[Y/n]" : "[y/N]"}`)).toLowerCase();
+      if (!reply) return defaultYes;
+      if (reply === "y" || reply === "yes") return true;
+      if (reply === "n" || reply === "no") return false;
+    }
+  }
+
+  try {
+    if (interactive) {
+      console.log(`${initialized ? "Refreshing Project Pulse in" : "Initializing Project Pulse in"} ${service.rootDir}`);
+      if (!initialized) {
+        name ??= (await answer(`Project name [${basename(service.rootDir)}]:`)) || undefined;
+        summary ??= (await answer("Project summary (optional):")) || undefined;
+      }
+      withAgents ||= await yesNo("Add or refresh Project Pulse instructions in AGENTS.md?", true);
+      withSkill ||= await yesNo(`Install repo-local skill at ${DEFAULT_SKILL_REL_PATH}?`, false);
+      withMcp ||= await yesNo("Configure .mcp.json (mcpServers JSON; requires a compatible client)?", false);
+    }
+
+    if (service.isInitialized() !== initialized) {
+      throw new Error(`'${service.configPath}' changed initialization status. Rerun 'pp init'.`);
+    }
+    const prepared = prepareRepoInit(service, {
+      name, summary, force, writeRoadmap, withAgents, withMcp, withSkill, includeSnippet,
+    });
+    const { result, actions, agentsSnippet } = prepared;
+    if (result.created !== !initialized) {
+      throw new Error(`'${service.configPath}' changed initialization status. Rerun 'pp init'.`);
+    }
+    const hasChanges = actions.some((item) => item.action !== "unchanged");
+    if (interactive) {
+      printInitActions(service.rootDir, actions);
+      if (!dryRun && hasChanges && !await yesNo("Apply these changes?", false)) throw cancelled;
+    }
+    if (!dryRun && hasChanges) prepared.apply();
+
+    if (jsonMode) {
+      console.log(JSON.stringify({
+        ...result,
+        ...(explicitExtras || dryRun ? { dryRun, actions } : {}),
+        ...(includeSnippet ? { agentsSnippet } : {}),
+      }, null, 2));
+      return 0;
+    }
+    if (!interactive && (explicitExtras || dryRun)) {
+      console.log(`Target: ${service.rootDir}`);
+      printInitActions(service.rootDir, actions);
+    }
+    if (dryRun) {
+      console.log("Dry run — no files were modified.");
+    } else if (!hasChanges) {
+      console.log("Project Pulse is already up to date.");
+    } else if (writeRoadmap) {
+      console.log(
+        `${result.created ? "Initialized" : "Updated"} .project-pulse/ for "${result.config.project.name}" and generated ROADMAP.md`
+      );
+    } else {
+      console.log("Updated Project Pulse repository files.");
+    }
+    if (includeSnippet) console.log(`\n${agentsSnippet}`);
+    return 0;
+  } catch (error) {
+    if (error !== cancelled) throw error;
+    console.log("Initialization cancelled; no files were changed.");
+    return interrupted ? 130 : 0;
+  } finally {
+    rl?.close();
+  }
 }
 
 export async function runCli(argv: string[], deps: CliDependencies = {}): Promise<number> {
@@ -344,6 +463,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
 
   const service = new RoadmapService(rootDir);
   const beadsClient = deps.beadsClient ?? new CliBeadsClient();
+  const hasTty = deps.isTty ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
   let cmd = rawCmd;
   let subcmd: string | undefined = rawSubcmd;
@@ -394,31 +514,7 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         if (subcmd !== undefined) {
           throw new Error(`Unexpected argument '${subcmd}' for 'init'`);
         }
-        const result = service.init({
-          name: getFlag(parsed, "name"),
-          summary: getFlag(parsed, "summary"),
-          force: parsed.booleans.has("force"),
-        });
-        const includeSnippet = parsed.booleans.has("agents-snippet");
-        if (jsonMode) {
-          console.log(
-            JSON.stringify(
-              includeSnippet ? { ...result, agentsSnippet: getAgentsSnippet() } : result,
-              null,
-              2
-            )
-          );
-        } else {
-          console.log(
-            `${result.created ? "Initialized" : "Updated"} .project-pulse/ for "${result.config.project.name}" and generated ROADMAP.md`
-          );
-          if (includeSnippet) {
-            console.log(`\n${getAgentsSnippet()}`);
-          } else {
-            console.log("Tip: run 'pp init --agents-snippet' to print AGENTS.md instructions for AI agents.");
-          }
-        }
-        return 0;
+        return await runInit(service, parsed, jsonMode, hasTty);
       }
 
       case "summary": {
@@ -744,7 +840,6 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           if (jsonMode) {
             throw new Error("Flag '--json' cannot be used with '--tui'");
           }
-          const hasTty = deps.isTty ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
           if (!hasTty) {
             throw new Error("pp view --tui requires an interactive TTY terminal");
           }
@@ -854,38 +949,6 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
           console.log(JSON.stringify(result, null, 2));
         } else {
           process.stdout.write(result.markdown);
-        }
-        return 0;
-      }
-
-      case "setup": {
-        if (subcmd !== undefined) {
-          throw new Error(`Unexpected argument '${subcmd}' for 'setup'`);
-        }
-        const rawAgents = getFlag(parsed, "agents-md");
-        const rawMcp = getFlag(parsed, "mcp");
-        const rawSkill = getFlag(parsed, "skill");
-        const result = runRepoSetup(rootDir, {
-          agentsMdPath: rawAgents ? resolve(cwd, rawAgents) : undefined,
-          mcpPath: rawMcp ? resolve(cwd, rawMcp) : undefined,
-          skillPath: rawSkill ? resolve(cwd, rawSkill) : undefined,
-          withSkill: parsed.booleans.has("with-skill"),
-          init: parsed.booleans.has("init"),
-          dryRun: parsed.booleans.has("dry-run"),
-        });
-        if (jsonMode) {
-          console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-        } else {
-          if (result.dryRun) {
-            console.log("Dry-run mode — no files were modified:");
-          }
-          for (const item of result.actions) {
-            console.log(`[${item.action}] ${item.path} — ${item.detail}`);
-          }
-          if (!rawMcp) {
-            console.log("\nMCP server config snippet (pass --mcp <path> to write automatically):");
-            console.log(JSON.stringify(result.mcpConfig, null, 2));
-          }
         }
         return 0;
       }

@@ -26,7 +26,7 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 - **Repo-native store:** one Markdown + YAML file per milestone and per feature. Changes merge cleanly, diff nicely, and need no server. Values are written with round-trip-verified YAML, so titles that look like numbers, booleans, or dates — or end in a colon — survive add, reload, and `pp check` byte-exact on every supported runtime (Node.js 24+, Bun 1.3+).
 - **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
 - **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
-- **Agent-ready:** token-lean `pp summary`, machine-readable `--json` output on every data command (the interactive `pp view` and `pp mcp` servers are the exceptions), a stdio MCP server, and `pp setup` to wire up `AGENTS.md` and MCP config.
+- **Agent-ready:** token-lean `pp summary`, machine-readable `--json` on data commands, a stdio MCP server, and optional repo-local agent guidance through `pp init`.
 - **Dashboards:** a multi-project local hub with cards, dependency graph, and status board views, plus live reload and quick actions. There's also a TUI for SSH and tmux.
 - **Reporting:** `pp digest` for recent activity, `pp changelog` for release notes, and `pp export --html` for a self-contained offline snapshot.
 - **Optional [Beads](https://github.com/steveyegge/beads) integration:** link features to `bd:<id>` issues to see their live status and detect drift. Read-only, and entirely optional.
@@ -68,7 +68,7 @@ You can also skip linking and run it in place with `bun run /path/to/project-pul
 From the root of any repository:
 
 ```bash
-pp init --name "My Project" --summary "High-level roadmap."
+pp init
 pp milestone add v0.1 --title "v0.1 — Core Foundation" --status active --target "2026-Q4"
 pp feature add offline-sync --title "Offline-First Sync" --milestone v0.1 --area Core \
   --criterion "Queue local changes offline" \
@@ -80,7 +80,9 @@ pp feature note offline-sync "Queue landed"  # log progress
 pp view                                      # open the live dashboard
 ```
 
-`pp init` won't overwrite an existing hand-written `ROADMAP.md`. Move it aside, or pass `--force`.
+In a terminal, `pp init` asks for project metadata and offers three independent agent integrations. It previews the selected file changes before asking for confirmation. Use `pp init --dry-run` to stop at the preview, or `pp init --non-interactive --name "My Project" --summary "High-level roadmap."` to set up just the roadmap from a script.
+
+`pp init` won't overwrite an existing hand-written `ROADMAP.md`. Move it aside, or pass `--force` to replace it. `--force` does not bypass interactive confirmation or overwrite custom agent files.
 
 Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.project-pulse/.store-lock.sqlite` — coordination state, never source. Ignore it in consumer repos: `.project-pulse/.store-lock.sqlite*`. A mutation waits up to 10s for the lock (override with `PP_LOCK_TIMEOUT_MS`), then fails with a retryable conflict.
 
@@ -89,8 +91,7 @@ Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.pro
 | Command | Description |
 | :--- | :--- |
 | `pp` | Runs `summary` if the repo is initialized, otherwise shows help (with `--json`: `{"ok":true,"initialized":false}` plus a next-step message). |
-| `pp init [--name <name>] [--summary <text>] [--agents-snippet] [--force]` | Creates `.project-pulse/` and generates `ROADMAP.md`. |
-| `pp setup [--mcp <path>] [--with-skill] [--dry-run]` | Idempotently wires up `AGENTS.md` instructions, MCP server config, and an optional agent skill file. |
+| `pp init [--name <name>] [--summary <text>] [--with-agents] [--with-mcp] [--with-skill] [--non-interactive] [--dry-run] [--agents-snippet] [--force]` | Initializes the roadmap and installs only the selected repo-local agent integrations. |
 | `pp summary [--milestone <id>] [--status <s>] [--json]` | Token-lean overview of milestones, features, criteria progress, and latest notes. |
 | `pp show <feature-id> [--beads \| --no-beads] [--json]` | One feature in full: description, criteria, dependencies, update log, linked issues. |
 | `pp milestone add\|update\|remove <id> ...` | Manage release milestones. |
@@ -106,7 +107,7 @@ Concurrent `pp` processes serialize writes through a local SQLite sidecar, `.pro
 | `pp view --tui [--no-beads]` | Interactive terminal dashboard. |
 | `pp mcp` | Stdio MCP server. |
 
-Every command accepts `--root <dir>` (default: the nearest parent directory containing `.project-pulse/`). Every command that prints roadmap data also accepts `--json` for machine-readable output. The exceptions are the interactive servers: `pp view` prints human-readable startup text, and `pp mcp` speaks JSON-RPC over stdio — for both, `--json` (a CLI data-output flag, not a protocol switch) does not apply and is rejected.
+Every command accepts `--root <dir>`. `pp init` defaults to the current directory; other commands look for the nearest parent containing `.project-pulse/`. Every command that prints roadmap data also accepts `--json` for machine-readable output. The exceptions are the interactive servers: `pp view` prints human-readable startup text, and `pp mcp` speaks JSON-RPC over stdio — for both, `--json` (a CLI data-output flag, not a protocol switch) does not apply and is rejected.
 
 Flag values that would look like options are passed with `=` syntax (for example `--title=--json`). A value given as a separate argument must not be an option token, and numeric flags reject blank values instead of silently coercing them to `0`; negative numbers such as `--order -5` stay valid.
 
@@ -145,13 +146,19 @@ pp view --tui [--no-beads]
 
 ## AI agents and MCP
 
-The quickest way to wire up an agent:
+Select integrations during `pp init`, or enable them explicitly without prompts:
 
 ```bash
-pp setup --mcp .mcp.json          # adds an AGENTS.md block and an MCP server entry (merged, idempotent)
+pp init --non-interactive --with-agents --with-mcp --with-skill
 ```
 
-Or configure the MCP server yourself:
+- `--with-agents` adds or refreshes a managed `AGENTS.md` block. To print the guidance for copy/paste instead, use `pp init --agents-snippet`; it doesn't write agent files unless you also select them.
+- `--with-skill` installs `.agents/skills/project-pulse/SKILL.md`.
+- `--with-mcp` adds an entry to the repo-root `.mcp.json`. The client must support that file and its `mcpServers` format; otherwise configure `pp mcp` in the client yourself.
+
+On an initialized repo, selecting integrations leaves the roadmap untouched unless you also pass `--name`, `--summary`, or `--force`. Preview an integration refresh with `--dry-run`. If an existing file conflicts, resolve it or omit that integration; `pp init` won't replace custom guidance or a custom server entry.
+
+For manual MCP configuration:
 
 ```json
 {
@@ -168,6 +175,8 @@ MCP tools: `roadmap_summary`, `roadmap_show_feature`, `roadmap_upsert_milestone`
 ## Beads integration (optional)
 
 If you track tasks with [Beads](https://github.com/steveyegge/beads), add refs such as `--add-ref bd:proj-42` to a feature. The `pp show`, `pp check --beads`, and dashboard views then show each issue's live status and flag drift, for example a shipped feature with open issues. Project Pulse only reads from `bd` and never writes to it. Without Beads installed, everything else works the same. To turn the integration off, set `integrations.beads.enabled: false` in `.project-pulse/config.yaml`.
+
+`pp init` generates Beads-specific guidance only when the selected repo has a regular `.beads/config.yaml`, `.beads/metadata.json`, or `.beads/redirect` marker and the integration is enabled. Use Project Pulse for milestones, features, and acceptance criteria; use Beads for issues, bugs, and blockers. Closing a linked issue does not ship a feature.
 
 ## Documentation
 
