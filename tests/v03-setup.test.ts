@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { runCli } from "../src/cli-main";
@@ -75,7 +75,7 @@ describe("pp init", () => {
       },
     });
     expect(readdirSync(tempDir).sort()).toEqual([".project-pulse", ROADMAP]);
-    expect(read(ROADMAP)).toStartWith(GENERATED_HEADER);
+    expect(read(ROADMAP).slice(0, GENERATED_HEADER.length)).toBe(GENERATED_HEADER);
   });
 
   test("dry run plans every selected file without creating anything", async () => {
@@ -103,7 +103,8 @@ describe("pp init", () => {
       [join(tempDir, MCP), "update"],
       [join(tempDir, SKILL), "create"],
     ]);
-    expect(read(AGENTS)).toStartWith(agentsBefore + AGENTS_BLOCK_START);
+    const agentsPrefix = agentsBefore + AGENTS_BLOCK_START;
+    expect(read(AGENTS).slice(0, agentsPrefix.length)).toBe(agentsPrefix);
     expect(read(SKILL)).toContain("name: project-pulse");
     expect(JSON.parse(read(MCP))).toEqual({
       ...mcpBefore,
@@ -129,7 +130,7 @@ describe("pp init", () => {
 
     const bareRerun = await captureCli(["init", "--non-interactive"]);
     expect(bareRerun.code).toBe(0);
-    expect(bareRerun.stdout).toStartWith("Updated .project-pulse/");
+    expect(bareRerun.stdout).toMatch(/^Updated \.project-pulse\//);
     expect(read(ROADMAP)).toBe(generated);
   });
 
@@ -206,7 +207,7 @@ describe("pp init", () => {
     const linkedDirectory = await captureCli(args, nested);
     expect(linkedDirectory.code).toBe(0);
     expect(JSON.parse(linkedDirectory.stdout).agentsSnippet).not.toMatch(/Beads|--beads/);
-    rmSync(local);
+    unlinkSync(local);
     mkdirSync(local);
     symlinkSync(join(markers, "config.yaml"), join(local, "config.yaml"));
     const linkedMarker = await captureCli(args, nested);
@@ -283,7 +284,7 @@ describe("pp init", () => {
     expect(read(ROADMAP)).toBe(handWritten);
     expect(present(".project-pulse")).toBe(false);
     expect((await captureCli(["init", "--json", "--force"])).code).toBe(0);
-    expect(read(ROADMAP)).toStartWith(GENERATED_HEADER);
+    expect(read(ROADMAP).slice(0, GENERATED_HEADER.length)).toBe(GENERATED_HEADER);
 
     write(ROADMAP, handWritten);
     const configBefore = read(CONFIG);
