@@ -1,5 +1,10 @@
 # Project Pulse — Release Notes
 
+## Unreleased
+
+- `pp init` replaces `pp setup`. It previews roadmap initialization and lets you opt into `AGENTS.md`, a repo-local skill, and `.mcp.json` independently. Scripts can use `--non-interactive` or `--json` with the `--with-*` flags.
+- Agent guidance includes the Beads workflow only in repos with a supported local Beads marker and an enabled integration.
+
 ## v0.1 — Core Foundation (2026-Q4)
 
 Initial release providing the .project-pulse/ store, CLI, ROADMAP.md compiler, Beads drift resolver, MCP server, and local browser dashboard.
