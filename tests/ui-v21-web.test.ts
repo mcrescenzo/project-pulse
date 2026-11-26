@@ -35,8 +35,24 @@ afterEach(async () => {
   handle = null;
   await hub?.stop();
   hub = null;
-  rmSync(tempDir, { recursive: true, force: true });
+  removeTempDir(tempDir);
 });
+
+/**
+ * Bun 1.3.0 (the declared floor) can fail a recursive rm of a just-unwatched tree with EFAULT.
+ * Retry briefly; a leftover temp dir must not fail an otherwise passing test.
+ */
+function removeTempDir(dir: string): void {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (attempt === 4) console.warn(`could not remove ${dir}: ${(err as Error).message}`);
+      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
 
 async function open(root: string, width = 1440, height = 900, opts: { noLiveReload?: boolean; init?: string } = {}): Promise<Page> {
   handle ??= await startViewServer(root, { port: 0, beadsClient: noBeads });
