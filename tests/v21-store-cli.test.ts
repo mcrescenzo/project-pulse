@@ -72,6 +72,11 @@ describe("SHIPPED_WITH_OPEN_CRITERIA (soft invariant)", () => {
     const one = svc.checkFeatureCriterion("base", "1", true);
     expect(one.warnings.find((w) => w.code === "SHIPPED_WITH_OPEN_CRITERIA")?.message).toContain("1 of 2");
 
+    // An unrelated write does not repeat another feature's shipped warning.
+    const unrelated = svc.logFeaturePulse({ id: "other", note: "unrelated" });
+    expect(unrelated.warnings.map((w) => w.code)).not.toContain("SHIPPED_WITH_OPEN_CRITERIA");
+    expect(svc.check().warnings.map((w) => w.code)).toContain("SHIPPED_WITH_OPEN_CRITERIA");
+
     const both = svc.logFeaturePulse({ id: "base", check_criteria: [svc.load().features.find((f) => f.id === "base")!.ship_criteria[1]!.id] });
     expect(both.warnings.map((w) => w.code)).not.toContain("SHIPPED_WITH_OPEN_CRITERIA");
     expect(svc.check().warnings.map((w) => w.code)).not.toContain("SHIPPED_WITH_OPEN_CRITERIA");

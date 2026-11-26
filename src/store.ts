@@ -920,7 +920,14 @@ export class RoadmapService {
       }
       throw new Error(introduced.map((e) => e.message).join("; "));
     }
-    return issues.filter((i) => i.level === "warning");
+    // SHIPPED_WITH_OPEN_CRITERIA describes a feature, not the write: report it only for features
+    // this write changed, so unrelated shipped features don't repeat on every command (pp check
+    // still lists them all).
+    const before = new Map(baseline.features.map((f) => [f.id, JSON.stringify(f)]));
+    const changed = new Set(features.filter((f) => before.get(f.id) !== JSON.stringify(f)).map((f) => f.id));
+    return issues.filter(
+      (i) => i.level === "warning" && (i.code !== "SHIPPED_WITH_OPEN_CRITERIA" || changed.has(i.entityId ?? ""))
+    );
   }
 
   upsertMilestone(input: UpsertMilestoneInput): MutationResult<Milestone> {
