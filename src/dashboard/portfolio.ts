@@ -19,12 +19,13 @@ export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Project Pulse — Portfolio Hub</title>
+  <title>Hub · Project Pulse</title>
   <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URL}" />
   ${EARLY_THEME_SCRIPT}
   <style>
     ${SHARED_THEME_CSS}
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -90,17 +91,22 @@ export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
     .project-top > div { min-width: 0; }
     .project-title { font-size: var(--fs-lg); font-weight: 700; margin: 0; }
     .project-path {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-family: var(--font-mono);
       font-size: var(--fs-xs);
       color: var(--muted);
-      word-break: break-all;
+      overflow-wrap: normal;
+      word-break: normal;
       margin-top: 2px;
     }
     .project-summary { margin: 0; color: var(--muted); font-size: var(--fs-base); }
     .progress-track { width: 100%; height: 7px; background: var(--surface-2); border-radius: var(--radius-sm); overflow: hidden; }
     .progress-fill { height: 100%; background: var(--st-shipped); }
     .project-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: var(--fs-xs); color: var(--muted); }
-    .project-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+    .project-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; padding-top: 4px; flex-wrap: wrap; }
+    .pill-warn { background: var(--warn-soft); color: var(--warn); }
+    .remove-confirm { flex: 1 1 100%; display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--fs-sm); }
+    .remove-confirm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-danger { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--danger); color: var(--on-accent); border: 0; cursor: pointer; font-size: var(--fs-xs); font-weight: 600; font-family: inherit; }
     .btn-open {
       display: inline-block;
       padding: 7px 14px;
@@ -136,7 +142,7 @@ export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
       </div>
       <div class="header-actions">
         <span class="pill pill-live"><span class="dot"></span> Hub Active</span>
-        <button type="button" class="icon-btn" id="theme-toggle">Theme</button>
+        <button type="button" class="icon-btn" id="theme-toggle" aria-pressed="false">Theme</button>
       </div>
     </header>
     <main id="projects" class="projects-grid"></main>
@@ -158,7 +164,14 @@ export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
     }
     function syncThemeButton() {
       const eff = getEffectiveTheme();
-      document.getElementById("theme-toggle").textContent = eff === "light" ? "Light theme" : "Dark theme";
+      const btn = document.getElementById("theme-toggle");
+      btn.textContent = eff === "light" ? "Dark" : "Light";
+      btn.title = eff === "light" ? "Switch to the dark theme" : "Switch to the light theme";
+      btn.setAttribute("aria-pressed", String(eff === "light"));
+    }
+    // Paths may break only after a separator, never mid-word.
+    function pathHtml(path) {
+      return String(path || "").split(/([\\/\\\\])/).map((part) => /^[\\/\\\\]$/.test(part) ? esc(part) + "<wbr>" : esc(part)).join("");
     }
     document.getElementById("theme-toggle").addEventListener("click", () => {
       const next = getEffectiveTheme() === "light" ? "dark" : "light";
@@ -185,28 +198,42 @@ export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
         const total = p.totals.features || 0;
         const shipped = p.totals.shipped || 0;
         const pct = total ? Math.round((shipped / total) * 100) : 0;
-        const healthPill = p.check && p.check.ok
-          ? '<span class="pill pill-ok">' + PP_PRESENT.healthText(0, 0) + '</span>'
-          : '<span class="pill pill-err">' + PP_PRESENT.healthText((p.check && p.check.errorCount) || 1, 0) + "</span>";
+        const errs = p.check ? p.check.errorCount || 0 : 1;
+        const warns = p.check ? p.check.warningCount || 0 : 0;
+        const healthPill = '<span class="pill ' + (errs ? "pill-err" : warns ? "pill-warn" : "pill-ok") + '">' + PP_PRESENT.healthText(errs, warns) + "</span>";
         return '<article class="project-card" data-project-slug="' + esc(p.slug) + '">' +
-          '<div class="project-top"><div><h2 class="project-title">' + esc(p.name) + '</h2><div class="project-path">' + esc(p.rootDir) + "</div></div>" + healthPill + "</div>" +
+          '<div class="project-top"><div><h2 class="project-title">' + esc(p.name) + '</h2><div class="project-path" title="' + esc(p.rootDir) + '">' + pathHtml(p.rootDir) + "</div></div>" + healthPill + "</div>" +
           (p.summary ? '<p class="project-summary">' + esc(p.summary) + "</p>" : "") +
           '<div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
-          '<div class="project-meta"><span>' + shipped + "/" + total + " shipped (" + pct + "%)</span><span>" + (p.totals.milestones || 0) + " milestone(s)</span><span>" + (p.totals.inProgress || 0) + " in progress</span></div>" +
+          '<div class="project-meta"><span>' + shipped + "/" + total + " shipped (" + pct + "%)</span><span>" + (p.totals.milestones || 0) + " " + ((p.totals.milestones || 0) === 1 ? "milestone" : "milestones") + "</span><span>" + (p.totals.inProgress || 0) + " in progress</span></div>" +
           '<div class="project-actions"><a class="btn-open" href="' + esc(p.url) + '">Open Dashboard</a><button type="button" class="btn-remove" data-remove-slug="' + esc(p.slug) + '">Remove</button></div>' +
         "</article>";
       }).join("");
 
       container.querySelectorAll("[data-remove-slug]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
+        btn.addEventListener("click", () => {
           const slug = btn.getAttribute("data-remove-slug");
-          if (!slug) return;
-          const r = await fetch("/api/hub/projects/" + encodeURIComponent(slug) + "/remove", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: "{}",
+          const card = btn.closest(".project-card");
+          if (!slug || !card || card.querySelector(".remove-confirm")) return;
+          const name = card.querySelector(".project-title").textContent;
+          const box = document.createElement("div");
+          box.className = "remove-confirm";
+          box.setAttribute("role", "group");
+          box.setAttribute("aria-label", "Confirm remove");
+          box.innerHTML =
+            "<div><strong>Remove " + esc(name) + " from this hub?</strong> This only unregisters it from the hub; the repository and its .project-pulse files stay unchanged. Run pp view there to add it back.</div>" +
+            '<div class="remove-confirm-actions"><button type="button" class="btn-danger" data-confirm-remove>Remove from hub</button><button type="button" class="btn-remove" data-cancel-remove>Cancel</button></div>';
+          card.querySelector(".project-actions").appendChild(box);
+          box.querySelector("[data-cancel-remove]").addEventListener("click", () => { box.remove(); btn.focus(); });
+          box.querySelector("[data-confirm-remove]").addEventListener("click", async () => {
+            const r = await fetch("/api/hub/projects/" + encodeURIComponent(slug) + "/remove", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+            if (r.ok) loadProjects();
           });
-          if (r.ok) loadProjects();
+          box.querySelector("[data-cancel-remove]").focus();
         });
       });
     }

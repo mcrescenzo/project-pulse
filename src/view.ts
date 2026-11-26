@@ -5,7 +5,7 @@ import { activityCacheKey, buildActivity, type ActivityResult } from "./activity
 import { buildDashboardHtml, FAVICON_SVG, type RoadmapViewPayload } from "./dashboard-html";
 import { buildAllowedHosts, buildOpenUrl, forbiddenHostResponse, generateAccessToken, handleTokenLanding, isAccessAuthorized, isAllowedHost, redactPaths, unauthorizedResponse, withSecurityHeaders } from "./http-security";
 import { startHttpServer } from "./http-server";
-import { RoadmapService } from "./store";
+import { RoadmapFrozenError, RoadmapService } from "./store";
 import type { BeadStatusInfo, FeatureStatus } from "./types";
 
 export interface ViewServerOptions {
@@ -505,6 +505,7 @@ export function createProjectSlot(
       toggleCriterionId?: string;
       done?: boolean;
       note?: string;
+      check_criteria?: unknown;
     };
     try {
       const parsedBody = await req.json();
@@ -519,6 +520,23 @@ export function createProjectSlot(
       return Response.json({ ok: false, error: "Invalid JSON payload" }, { status: 400 });
     }
 
+    // Ship confirm ("Also mark N criteria done") sends the status and the criteria in one write.
+    let checkCriteria: string[] | undefined;
+    if (body.check_criteria !== undefined) {
+      const raw = body.check_criteria;
+      if (
+        !Array.isArray(raw) ||
+        raw.length > 200 ||
+        !raw.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+      ) {
+        return Response.json(
+          { ok: false, error: "check_criteria must be an array of criterion ids" },
+          { status: 400 }
+        );
+      }
+      checkCriteria = raw as string[];
+    }
+
     try {
       const res = service.logFeaturePulse({
         id: featureId,
@@ -526,6 +544,7 @@ export function createProjectSlot(
         toggleCriterionId: body.toggleCriterionId,
         done: body.done,
         note: body.note,
+        check_criteria: checkCriteria,
       });
       broadcastReload("api");
       return Response.json({
@@ -534,6 +553,17 @@ export function createProjectSlot(
         warnings: res.warnings,
       });
     } catch (error) {
+      if (error instanceof RoadmapFrozenError) {
+        return Response.json(
+          {
+            ok: false,
+            code: "ROADMAP_FROZEN",
+            error: redactPaths(error.message),
+            errors: error.issues.map((i) => ({ ...i, message: redactPaths(i.message) })),
+          },
+          { status: 409 }
+        );
+      }
       const message = (error as Error).message;
       const status = message.includes("not found") ? 404 : 400;
       return Response.json({ ok: false, error: redactPaths(message) }, { status });

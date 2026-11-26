@@ -61,10 +61,10 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       });
 
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="ui-feature"]');
+      await page.waitForSelector('.row-open[data-feature-id="ui-feature"]');
 
       // 1. Keyboard navigation: focus card -> Enter opens ARIA dialog drawer -> Escape closes & restores focus
-      const card = page.locator('.card[data-feature-id="ui-feature"]');
+      const card = page.locator('.row-open[data-feature-id="ui-feature"]');
       await card.focus();
       await page.keyboard.press("Enter");
 
@@ -150,7 +150,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     }
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  test("switches between Cards, Dependency Graph, and Status Board views with shared filters and DAG highlight", async () => {
+  test("switches between Roadmap, Graph and Activity views with shared filters, DAG highlight and pinned traces", async () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "View Modes App" });
     svc.upsertMilestone({ id: "v0.1", title: "v0.1 Foundation", status: "shipped", order: 10 });
@@ -198,15 +198,15 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       });
 
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="node-a"]');
+      await page.waitForSelector('.row-open[data-feature-id="node-a"]');
 
-      // Filtering by "planned" hides milestones with no matching features
-      expect(await page.locator("section.milestone").count()).toBe(2);
+      // Filtering by "planned" hides milestone groups with no matching features
+      expect(await page.locator("tr.group").count()).toBe(2);
       await page.locator("#filter-status").selectOption("planned");
-      expect(await page.locator("section.milestone").count()).toBe(1);
-      expect(await page.locator("section.milestone h2").textContent()).toBe("v0.2 Next");
+      expect(await page.locator("tr.group").count()).toBe(1);
+      expect(await page.locator("tr.group h2").textContent()).toBe("v0.2 Next");
       await page.locator("#filter-reset").click();
-      expect(await page.locator("section.milestone").count()).toBe(2);
+      expect(await page.locator("tr.group").count()).toBe(2);
 
       // Switch to Dependency Graph view
       await page.locator("#tab-graph").click();
@@ -296,23 +296,27 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       expect(highlightState.c).toContain("is-downstream");
       expect(highlightState.d).toContain("is-dimmed");
 
-      // Plain clicking node C after drag opens drawer
+      // A click on node C after the drag pins its trace; clicking the pinned node opens the drawer
+      await page.locator('.graph-node[data-feature-id="node-c"]').click();
+      expect(await page.locator('.graph-node[data-feature-id="node-c"]').getAttribute("class")).toContain("is-pinned");
+      expect(await page.locator("#drawer-backdrop.open").count()).toBe(0);
       await page.locator('.graph-node[data-feature-id="node-c"]').click();
       await page.waitForSelector("#drawer-backdrop.open");
       expect(await page.locator("#drawer-title").textContent()).toBe("Dashboard View");
       await page.keyboard.press("Escape");
 
-      // Switch to Status Board view removes full-height graph body class and shares filter
+      // Switching to Activity leaves the full-height graph layout and shares the filters
       await page.locator("#filter-search").fill("Docs");
-      await page.locator("#tab-board").click();
-      await page.waitForSelector('.board-card[data-feature-id="node-d"]');
+      await page.locator("#tab-activity").click();
+      await page.waitForSelector('[data-empty="filtered"], [data-empty="none"], .day');
       expect(await page.evaluate(() => document.body.classList.contains("view-mode-graph"))).toBe(false);
-      expect(await page.locator(".board-card").count()).toBe(1);
 
-      // Clear filter and press Enter on Status Board card opens drawer
+      // Back on the Roadmap, the shared search filter shows one row; Enter on it opens the drawer
+      await page.locator("#tab-roadmap").click();
+      expect(await page.locator("tr.row").count()).toBe(1);
       await page.locator("#filter-reset").click();
-      expect(await page.locator(".board-card").count()).toBe(4);
-      await page.locator('.board-card[data-feature-id="node-a"]').focus();
+      expect(await page.locator("tr.row").count()).toBe(4);
+      await page.locator('.row-open[data-feature-id="node-a"]').focus();
       await page.keyboard.press("Enter");
       await page.waitForSelector("#drawer-backdrop.open");
       expect(await page.locator("#drawer-title").textContent()).toBe("Base Store");
@@ -479,14 +483,11 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
           })
         );
 
-      // Initial load failure surfaces the server-supplied redacted error, not a generic client string.
+      // Initial load failure surfaces the server-supplied redacted error in the error state, not a generic client string.
       await failRoadmap();
       await page.goto(handle.openUrl, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
-        () => {
-          const el = document.getElementById("load-status");
-          return !!el && !el.hidden && (el.textContent || "").includes("PP-DIAG store read failed [redacted]");
-        },
+        () => (document.querySelector('[data-state="load-error"]')?.textContent || "").includes("PP-DIAG store read failed [redacted]"),
         null,
         { timeout: 15000 }
       );
@@ -494,7 +495,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       // A successful load of the current snapshot clears the diagnostics.
       await page.unroute("**/api/roadmap");
       await page.reload({ waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="diag-a"]');
+      await page.waitForSelector('.row-open[data-feature-id="diag-a"]');
       await page.waitForFunction(
         () => {
           const el = document.getElementById("load-status");
@@ -515,7 +516,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
         null,
         { timeout: 15000 }
       );
-      expect(await page.locator('.card[data-feature-id="diag-a"]').count()).toBe(1);
+      expect(await page.locator('.row-open[data-feature-id="diag-a"]').count()).toBe(1);
 
       // Recovery renders the current snapshot and clears the banner.
       await page.unroute("**/api/roadmap");
@@ -572,10 +573,10 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     try {
       const page = await context.newPage();
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="jump-a"]');
+      await page.waitForSelector('.row-open[data-feature-id="jump-a"]');
 
       // Draft in A, then jump to dependency B: B must not inherit A's draft.
-      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.locator('.row-open[data-feature-id="jump-a"]').click();
       await page.waitForSelector("#drawer-backdrop.open");
       expect(await page.locator("#drawer-title").textContent()).toBe("Feature A");
       await page.locator("#drawer-note-input").fill("Draft for A");
@@ -586,7 +587,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       // A retains its draft when the user comes back.
       await page.locator("#drawer-note-input").fill("Draft for B");
       await page.locator("#drawer-close").click();
-      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.locator('.row-open[data-feature-id="jump-a"]').click();
       await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Feature A");
       expect(await page.locator("#drawer-note-input").inputValue()).toBe("Draft for A");
 
@@ -620,20 +621,19 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       );
       // A's late save response cannot change B's draft or B's feedback.
       expect(await page.locator("#drawer-note-input").inputValue()).toBe("Draft for B after jump");
-      expect(await page.locator("#drawer-feedback").textContent()).toBe("");
+      expect(await page.locator("#drawer [data-feedback]").count()).toBe(0);
 
-      // The note landed for A, and A (not B) owns the persistent "Saved" feedback and newer draft.
+      // The note landed for A, and A keeps its newer draft.
       const savedA = svc.load().features.find((f) => f.id === "jump-a");
       expect(savedA?.updates.some((u) => u.note === "Late note for A")).toBe(true);
       await page.locator("#drawer-close").click();
-      await page.locator('.card[data-feature-id="jump-a"]').click();
+      await page.locator('.row-open[data-feature-id="jump-a"]').click();
       await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Feature A");
-      expect(await page.locator("#drawer-feedback").textContent()).toContain("Saved");
       expect(await page.locator("#drawer-note-input").inputValue()).toBe("Newer draft for A");
 
       // Prototype-colliding IDs dispatch and render through null-prototype draft/feedback maps.
       await page.locator("#drawer-close").click();
-      await page.locator('.card[data-feature-id="constructor"]').click();
+      await page.locator('.row-open[data-feature-id="constructor"]').click();
       await page.waitForFunction(
         () => document.getElementById("drawer-title")?.textContent === "Prototype Key Feature"
       );
@@ -641,7 +641,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       expect(await page.locator("#drawer-note-input").inputValue()).toBe("");
       await page.locator("#drawer-note-input").fill("Draft for constructor");
       await page.locator("#drawer-close").click();
-      await page.locator('.card[data-feature-id="constructor"]').click();
+      await page.locator('.row-open[data-feature-id="constructor"]').click();
       await page.waitForFunction(
         () => document.getElementById("drawer-title")?.textContent === "Prototype Key Feature"
       );
@@ -651,7 +651,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
       await page.locator("#drawer-note-input").fill("Prototype note");
       await page.locator("#drawer-note-submit").click();
       await page.waitForFunction(
-        () => (document.getElementById("drawer-feedback")?.textContent || "") === "Saved",
+        () => (document.querySelector('#drawer [data-feedback="note"]')?.textContent || "") === "Logged",
         null,
         { timeout: 15000 }
       );
@@ -695,7 +695,7 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     try {
       const page = await context.newPage();
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="dep-child"]');
+      await page.waitForSelector('.row-open[data-feature-id="dep-child"]');
 
       // Open the health panel, then its Inspect chip: the drawer overlays the panel.
       await page.locator("#health-badge").click();
@@ -768,10 +768,12 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     try {
       const page = await context.newPage();
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="vanish-a"]');
+      await page.waitForSelector('.row-open[data-feature-id="vanish-a"]');
       await page.locator("#tab-graph").click();
       await page.waitForSelector('.graph-node[data-feature-id="vanish-a"]');
 
+      // First click pins the trace, the second opens the drawer.
+      await page.locator('.graph-node[data-feature-id="vanish-a"]').click();
       await page.locator('.graph-node[data-feature-id="vanish-a"]').click();
       await page.waitForSelector("#drawer-backdrop.open");
       expect(await page.locator("#drawer-title").textContent()).toBe("Vanishing Feature");
@@ -800,11 +802,11 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     }
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  test("fit-to-view shows all nodes of a wide 24-feature layer at 1280px while interactive zoom stays floored", async () => {
+  test("fit-to-view shows all nodes of a wide 40-feature layer at 1280px while interactive zoom stays floored", async () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "Wide Fit App", summary: "Fit must reach every node in one wide layer." });
     svc.upsertMilestone({ id: "v0.1", title: "v0.1 Core", status: "active", order: 10 });
-    for (let i = 1; i <= 24; i++) {
+    for (let i = 1; i <= 40; i++) {
       const id = `fit-${String(i).padStart(2, "0")}`;
       svc.addFeature({
         id,
@@ -822,15 +824,17 @@ describeUi("Playwright UI Regression Suite (pp view)", () => {
     try {
       const page = await context.newPage();
       await page.goto(handle.openUrl, { waitUntil: "networkidle" });
-      await page.waitForSelector('.card[data-feature-id="fit-01"]');
+      await page.waitForSelector('.row-open[data-feature-id="fit-01"]');
       await page.locator("#tab-graph").click();
-      await page.waitForSelector('.graph-node[data-feature-id="fit-24"]');
-      expect(await page.locator(".graph-node").count()).toBe(24);
+      await page.waitForSelector('.graph-node[data-feature-id="fit-40"]');
+      expect(await page.locator(".graph-node").count()).toBe(40);
 
       const vpBox = await page.locator("#graph-viewport").boundingBox();
       expect(vpBox).not.toBeNull();
 
-      // Fit must drop below the old 0.25 floor to fit the whole layer.
+      // The graph fits on open; Fit must drop below the old 0.25 floor to fit the whole layer.
+      const openScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
+      expect(openScale).toBeLessThan(0.25);
       await page.locator("#graph-zoom-fit").click();
       const fitScale = Number(await page.locator("#graph-canvas").getAttribute("data-scale"));
       expect(fitScale).toBeGreaterThan(0);

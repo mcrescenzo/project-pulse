@@ -340,7 +340,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
 
       // 2. Click Open Dashboard on Alpha UI
       await page.locator('.project-card[data-project-slug="alpha-ui"] .btn-open').click();
-      await page.waitForSelector('.card[data-feature-id="alpha-feat"]');
+      await page.waitForSelector('.row-open[data-feature-id="alpha-feat"]');
       expect(await page.locator("#project-name").textContent()).toBe("Alpha UI");
 
       // 3. Switch to Beta UI using header project switcher
@@ -349,7 +349,7 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
         return sel && sel.options.length >= 2;
       });
       await page.locator("#project-switcher").selectOption("/p/beta-ui");
-      await page.waitForSelector('.card[data-feature-id="beta-feat"]');
+      await page.waitForSelector('.row-open[data-feature-id="beta-feat"]');
       expect(await page.locator("#project-name").textContent()).toBe("Beta UI");
 
       expect(consoleErrors).toEqual([]);

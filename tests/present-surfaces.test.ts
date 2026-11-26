@@ -104,7 +104,7 @@ describeUi("shared vocabulary on the web dashboard", () => {
           return document.body.innerText + "\n" + opts.join("\n");
         });
       seen.push(await visibleText());
-      for (const tab of ["graph", "board", "cards"]) {
+      for (const tab of ["graph", "activity", "roadmap"]) {
         await page.click(`[data-view="${tab}"]`);
         await page.waitForTimeout(150);
         seen.push(await visibleText());

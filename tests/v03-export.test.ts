@@ -138,27 +138,31 @@ describe("v0.3 Static HTML Export", () => {
       });
 
       await page.goto(pathToFileURL(outPath).href, { waitUntil: "load" });
-      await page.waitForSelector('.card[data-feature-id="core-api"]');
+      await page.waitForSelector('.row-open[data-feature-id="core-api"]');
 
       expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
-      expect(await page.locator("#live-badge").textContent()).toContain("Offline Snapshot");
+      expect(await page.locator("#live-badge").textContent()).toContain("Read-only snapshot");
 
       // Filters work offline
       await page.locator("#filter-search").fill("Viewer");
-      expect(await page.locator(".card").count()).toBe(1);
+      expect(await page.locator("tr.row").count()).toBe(1);
       await page.locator("#filter-reset").click();
-      expect(await page.locator(".card").count()).toBe(2);
+      expect(await page.locator("tr.row").count()).toBe(2);
 
       // View switcher works offline
       await page.locator("#tab-graph").click();
       await page.waitForSelector('.graph-node[data-feature-id="offline-ui"]');
-      await page.locator("#tab-board").click();
-      await page.waitForSelector('.board-card[data-feature-id="core-api"]');
+      // Activity replaces the Status Board and renders the embedded events without fetching
+      await page.locator("#tab-activity").click();
+      await page.waitForSelector('[data-empty="none"], .day, [data-state="no-git"]');
+      expect(await page.locator("#tab-board").count()).toBe(0);
+      await page.locator("#tab-roadmap").click();
 
-      // Opening drawer offline renders read-only controls (no form, disabled checkbox)
-      await page.locator('.board-card[data-feature-id="core-api"]').click();
+      // Opening drawer offline shows the read-only notice and disabled controls (no note form)
+      await page.locator('.row-open[data-feature-id="core-api"]').click();
       await page.waitForSelector("#drawer-backdrop.open");
-      expect(await page.locator("#drawer-status").count()).toBe(0);
+      expect(await page.locator('#drawer [data-state="read-only"]').textContent()).toContain("Read-only snapshot");
+      expect(await page.locator("#drawer [data-status-pill]").first().isDisabled()).toBe(true);
       expect(await page.locator("#drawer-note-form").count()).toBe(0);
       expect(
         await page.locator('#drawer input[data-criterion-id]').first().isDisabled()

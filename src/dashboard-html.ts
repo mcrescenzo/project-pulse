@@ -77,10 +77,10 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
       : "";
 
   const switcherHtml = options.projectSwitcher
-    ? `<div class="hub-nav">
-        <a class="hub-home-link" href="${options.projectSwitcher.portfolioUrl.replace(/"/g, "&quot;")}">All Projects</a>
-        <select id="project-switcher" class="hub-select" aria-label="Switch project"></select>
-      </div>`
+    ? `<nav class="hub-bar" aria-label="Hub navigation">
+      <a class="hub-home-link" href="${escapeHtmlAttr(options.projectSwitcher.portfolioUrl)}">All projects</a>
+      <select id="project-switcher" class="hub-select" aria-label="Switch project"></select>
+    </nav>`
     : "";
 
   // Offline snapshots are opened from disk: lock them down to inline code/styles with no network access.
@@ -91,64 +91,63 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
   const liveBadgeInitial =
     mode === "static"
-      ? `<span class="pill pill-snapshot" id="live-badge">Offline Snapshot</span>`
-      : `<span class="pill pill-live" id="live-badge"><span class="dot"></span> Live</span>`;
+      ? `<span class="pill pill-snapshot" id="live-badge">Read-only snapshot</span>`
+      : `<button type="button" class="pill pill-live pill-btn" id="live-badge" title="Reload the roadmap"><span class="dot"></span> Live</button>`;
+
+  const projectName = options.embeddedData?.config?.project?.name;
+  const pageTitle = projectName ? `${escapeHtmlText(projectName)} · Project Pulse` : "Project Pulse";
+  const statuses = ["planned", "in-progress", "shipped", "paused", "cut"];
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />${staticCspMeta}
-  <title>Project Pulse — Roadmap</title>
+  <title>${pageTitle}</title>
   <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URL}" />
   ${EARLY_THEME_SCRIPT}
   <style>
     ${SHARED_THEME_CSS}${DASHBOARD_CSS}  </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div>
-        ${switcherHtml}
-        <h1 id="project-name">Loading roadmap…</h1>
+  <div class="page" id="page">
+    ${switcherHtml}
+    <header class="topbar">
+      <div class="who">
+        <h1 id="project-name"></h1>
         <p class="subtitle" id="project-summary"></p>
-        <div class="load-status" id="load-status" role="alert" hidden></div>
       </div>
-      <div class="header-badges">
+      <div class="topbar-right">
+        <div class="dist" id="dist" role="group" aria-label="Features by status (click to filter)"></div>
+        <button type="button" class="pill pill-btn" id="health-badge" aria-expanded="false" aria-controls="health-panel" hidden></button>
         ${liveBadgeInitial}
-        <button type="button" class="pill pill-btn" id="health-badge" aria-expanded="false" aria-controls="health-panel">Checking…</button>
-        <button type="button" class="icon-btn" id="theme-toggle" aria-label="Toggle color theme" title="Switch light or dark theme">Theme</button>
+        <button type="button" class="icon-btn" id="theme-toggle" aria-pressed="false">Theme</button>
       </div>
     </header>
 
     <section class="health-panel" id="health-panel" hidden aria-label="Roadmap validation and Beads health details"></section>
 
-    <section class="stats" id="stats"></section>
-
-    <div class="controls-row">
-      <div class="view-tabs" role="tablist" aria-label="Roadmap view modes">
-        <button type="button" class="view-tab is-active" id="tab-cards" role="tab" aria-selected="true" data-view="cards">${VIEW_LABELS.roadmap}</button>
+    <nav class="toolbar" aria-label="Views and filters">
+      <div class="view-tabs" role="tablist" aria-label="Views">
+        <button type="button" class="view-tab is-active" id="tab-roadmap" role="tab" aria-selected="true" data-view="roadmap">${VIEW_LABELS.roadmap}</button>
         <button type="button" class="view-tab" id="tab-graph" role="tab" aria-selected="false" data-view="graph">${VIEW_LABELS.graph}</button>
-        <button type="button" class="view-tab" id="tab-board" role="tab" aria-selected="false" data-view="board">Board</button>
+        <button type="button" class="view-tab" id="tab-activity" role="tab" aria-selected="false" data-view="activity">${VIEW_LABELS.activity}</button>
       </div>
-
-      <section class="filters" aria-label="Roadmap filters">
-        <select id="filter-milestone" aria-label="Filter by milestone"><option value="">All Milestones</option></select>
+      <div class="filters" role="group" aria-label="Filters">
+        <select id="filter-milestone" aria-label="Filter by milestone"><option value="">All milestones</option></select>
         <select id="filter-status" aria-label="Filter by status">
-          <option value="">All Statuses</option>
-          ${["planned", "in-progress", "shipped", "paused", "cut"].map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join("\n          ")}
+          <option value="">All statuses</option>
+          ${statuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join("\n          ")}
         </select>
-        <select id="filter-area" aria-label="Filter by area"><option value="">All Areas</option></select>
-        <input type="search" id="filter-search" aria-label="Filter features by text" placeholder="Filter features..." />
-        <label class="toggle-label">
-          <input type="checkbox" id="toggle-deps" checked />
-          Show dependencies
-        </label>
-        <button type="button" class="btn-ghost" id="filter-reset" hidden>Reset filters</button>
-      </section>
-    </div>
+        <select id="filter-area" aria-label="Filter by area"><option value="">All areas</option></select>
+        <input type="search" id="filter-search" aria-label="Filter features by text" placeholder="Filter features…" />
+        <label class="toggle-label"><input type="checkbox" id="toggle-deps" checked /> Deps</label>
+        <button type="button" class="btn-ghost" id="filter-reset" data-visible="false" aria-hidden="true" tabindex="-1">Reset filters</button>
+      </div>
+    </nav>
 
-    <main id="milestones"></main>
+    <div class="notice is-warn load-status" id="load-status" role="alert" hidden></div>
+    <main id="view" class="view" aria-live="polite"><p class="loading" id="loading">Loading the roadmap…</p></main>
   </div>
 
   <div class="drawer-backdrop" id="drawer-backdrop" aria-hidden="true">
@@ -160,4 +159,12 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
     const PP_RUNTIME = ${escapeJsonForScript(runtimeConfig)};${PRESENT_CLIENT_JS}${DASHBOARD_CLIENT_SCRIPT}  </script>
 </body>
 </html>`;
+}
+
+function escapeHtmlText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtmlAttr(value: string): string {
+  return escapeHtmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }

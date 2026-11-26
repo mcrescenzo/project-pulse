@@ -230,7 +230,11 @@ export interface ActivityRepo {
  *   Nov 22 15:00  gamma paused → planned (same-day reversal)
  * Notes: alpha Nov 19 08:00 (committed with the criterion), beta Nov 21 07:00.
  */
-export function buildActivityRepo(dir: string): ActivityRepo {
+export function buildActivityRepo(dir: string, options: { anchor?: Date } = {}): ActivityRepo {
+  // Every commit is placed relative to `anchor` (default Nov 23 2026 12:00 UTC, which yields the
+  // dates in the comment above); pass the current time to build history inside live windows.
+  const anchor = options.anchor ?? new Date("2026-11-23T12:00:00Z");
+  const at = (days: number, hours = 0) => new Date(anchor.getTime() - days * 86_400_000 + hours * 3_600_000).toISOString();
   git(dir, ["init", "-q", "-b", "main"]);
   const svc = new RoadmapService(dir);
   svc.init({ name: "Activity", summary: "Dated history." });
@@ -242,20 +246,20 @@ export function buildActivityRepo(dir: string): ActivityRepo {
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-q", "-m", message], when);
   };
-  commit("baseline", "2026-11-10T12:00:00Z");
+  commit("baseline", at(13));
   svc.updateFeature("alpha", { status: "in-progress" });
-  commit("alpha in progress", "2026-11-18T12:00:00Z");
+  commit("alpha in progress", at(5));
   svc.checkFeatureCriterion("alpha", "1", true);
-  svc.logFeaturePulse({ id: "alpha", note: "First criterion landed.", at: "2026-11-19T08:00:00.000Z" });
-  commit("alpha criterion", "2026-11-19T12:00:00Z");
+  svc.logFeaturePulse({ id: "alpha", note: "First criterion landed.", at: at(4, -4) });
+  commit("alpha criterion", at(4));
   svc.addFeature({ id: "delta", title: "Delta", milestone: "m1", status: "planned", area: "UI" });
-  commit("add delta", "2026-11-20T12:00:00Z");
-  svc.logFeaturePulse({ id: "beta", note: "Ready to ship.", at: "2026-11-21T07:00:00.000Z" });
+  commit("add delta", at(3));
+  svc.logFeaturePulse({ id: "beta", note: "Ready to ship.", at: at(2, -5) });
   svc.updateFeature("beta", { status: "shipped" });
-  commit("ship beta", "2026-11-21T12:00:00Z");
+  commit("ship beta", at(2));
   svc.updateFeature("gamma", { status: "paused" });
-  commit("pause gamma", "2026-11-22T09:00:00Z");
+  commit("pause gamma", at(1, -3));
   svc.updateFeature("gamma", { status: "planned" });
-  commit("unpause gamma", "2026-11-22T15:00:00Z");
-  return { svc, now: new Date("2026-11-23T12:00:00Z") };
+  commit("unpause gamma", at(1, 3));
+  return { svc, now: anchor };
 }
