@@ -3,7 +3,7 @@ id: dashboard-tui
 title: "TUI: Roadmap ledger, Activity and mode-aware footer"
 milestone: v2.1
 order: 30
-status: in-progress
+status: shipped
 area: Dashboard
 depends_on:
   - dashboard-foundation

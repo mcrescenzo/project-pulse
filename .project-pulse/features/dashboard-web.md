@@ -3,7 +3,7 @@ id: dashboard-web
 title: "Web dashboard: Roadmap ledger, Activity and read-first drawer"
 milestone: v2.1
 order: 20
-status: in-progress
+status: shipped
 area: Dashboard
 depends_on:
   - dashboard-foundation

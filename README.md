@@ -12,12 +12,16 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 - a live browser dashboard (`pp view`)
 - a mouse-friendly terminal dashboard (`pp view --tui`)
 
-![Milestone cards view of the Project Pulse dashboard](docs/images/dashboard-cards.png)
+![Roadmap ledger of the Project Pulse dashboard: features grouped by milestone with status, criteria, dependencies and latest updates](docs/images/dashboard-roadmap.png)
 
 <table>
   <tr>
-    <td><img src="docs/images/dashboard-graph.png" alt="Dependency graph view with upstream and downstream tracing" /></td>
-    <td><img src="docs/images/dashboard-board.png" alt="Status board view" /></td>
+    <td><img src="docs/images/dashboard-graph.png" alt="Dependency graph, fitted to the window" /></td>
+    <td><img src="docs/images/dashboard-activity.png" alt="Activity view: what changed, grouped by day" /></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/tui-roadmap.png" alt="Terminal dashboard: Roadmap ledger at 120 columns" /></td>
+    <td><img src="docs/images/tui-graph.png" alt="Terminal dashboard: the dependency graph fitted to 80x24" /></td>
   </tr>
 </table>
 
@@ -27,7 +31,7 @@ Planning tends to end up either buried in granular task trackers or in a hand-ma
 - **Generated `ROADMAP.md`:** deterministic, always in sync, and `pp check` validates it.
 - **Altitude guardrails:** only milestones and features, with 2–6 outcome-level ship criteria each. Granular tasks belong in your issue tracker.
 - **Agent-ready:** token-lean `pp summary`, machine-readable `--json` on data commands, a stdio MCP server, and optional repo-local agent guidance through `pp init`.
-- **Dashboards:** a multi-project local hub with cards, dependency graph, and status board views, plus live reload and quick actions. There's also a TUI for SSH and tmux.
+- **Read-first dashboards:** a multi-project local hub whose views answer where the project is, what's at risk, what's blocked and what changed: a **Roadmap** ledger, a fitted dependency **Graph**, and **Activity** (dated changes, uncommitted edits first). Live reload, quick edits that never fail silently, and a matching TUI for SSH and tmux.
 - **Reporting:** `pp digest` for recent activity, `pp changelog` for release notes, and `pp export --html` for a self-contained offline snapshot.
 - **Optional [Beads](https://github.com/steveyegge/beads) integration:** link features to `bd:<id>` issues to see their live status and detect drift. Read-only, and entirely optional.
 
@@ -137,19 +141,21 @@ See [SECURITY.md](SECURITY.md) for the full model.
 pp view --tui [--no-beads]
 ```
 
-- **Views and filters:** click the tabs, or press `1` (Milestone Cards), `2` (Dependency Graph), or `3` (Status Board).
-  - Click the filter pills (`M:`, `S:`, `A:`), press `/` for live search, or click `Reset`.
-- **Waterfall graph:** a top-to-bottom dependency DAG.
-  - Three zoom densities: use the mouse wheel, `+`/`-`, `0`, `F`, or the toolbar buttons.
-  - Click and drag to pan.
+- **Views:** press `1` (Roadmap), `2` (Graph) or `3` (Activity), or click the tabs. Entering a view selects its first item; `j`/`k` move and `Enter` opens.
+  - **Roadmap** is one row per feature under its milestone: status mark, title, `n/m` criteria and the first dependency, plus id, area and latest update from 120 columns.
+  - **Activity** lists what changed, grouped by day, with uncommitted edits first; `w` switches between 7 and 30 days.
+- **Filters:** click a count in the status line under the header, press `s`, `a` or `M` for the status, area or milestone filter, `/` for live search, and `c` to clear.
+- **Graph:** a top-to-bottom dependency DAG that fits the terminal on entry and after every filter change; each edge keeps its own channel and arrowhead.
+  - Three densities: mouse wheel, `+`/`-`, `0` (actual size), `f` (fit). Drag or arrows pan. When nothing fits, a cue says so and `j`/`k` reveal every node.
   - Hovering traces upstream dependencies in amber and downstream ones in green; clicking opens the drawer. Press `h` to switch to click-to-trace.
-- **Detail drawer:** shows as a split pane on terminals at least 120 columns wide, and as a modal on narrower ones.
-  - Change the status, toggle criteria (`Space`), and add notes (`n`, then `Enter`).
-  - Changes are saved immediately and reload live.
+- **Detail drawer:** a split pane at 120+ columns, a modal below.
+  - `Tab` moves between the status pills and the criteria; `←`/`→` and `Enter` set the status, `Space` toggles a criterion, `n` types a note.
+  - Saves are acknowledged on the control that changed; a failure stays until you press `x`. When the roadmap has errors that block saving, the drawer says so up front and `e` opens Health.
+  - Shipping with open criteria asks first: mark them done in the same write, ship anyway, or cancel.
 - **SSH ergonomics:**
   - `m` toggles mouse capture, so you can select text natively.
   - `y` copies the feature id via OSC 52.
-  - `?` shows the shortcuts.
+  - `?` shows the shortcuts; the footer always shows the current mode's keys and ends with `? Help · q Quit`.
   - `q` quits and restores your terminal.
 
 ## AI agents and MCP

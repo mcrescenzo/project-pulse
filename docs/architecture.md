@@ -107,7 +107,9 @@ Provides the conflict-free `.project-pulse/` storage layer and deterministic `RO
 | `src/view.ts` | Per-project "slot": file watcher, SSE live reload, JSON API, quick-action handler. Also the standalone dashboard server. |
 | `src/hub.ts` | Multi-project local hub. The first `pp view` starts it, and later ones register their repo with it (`/`, `/p/<slug>`). |
 | `src/http-security.ts` | Host validation, access token and cookie handling, security headers, and safe URL helpers shared by the view and hub servers. |
-| `src/dashboard-html.ts` | Self-contained dashboard and portfolio HTML/JS: cards, dependency graph, status board, and detail drawer. |
+| `src/dashboard-html.ts`, `src/dashboard/*` | Self-contained dashboard and hub pages, generated as one HTML string from modules: design tokens (`theme.ts`, see `DESIGN.md`), stylesheet, client script (Roadmap ledger, Graph, Activity, detail drawer) and the hub portfolio page. |
+| `src/present.ts` | Shared vocabulary for web and TUI: view names, status labels, `n/m criteria`, short local timestamps, health text. |
+| `src/activity.ts`, `src/git-history.ts` | Activity feed: dated events from successive committed roadmap states plus note timestamps and uncommitted edits; batched `git cat-file` reads shared with `pp digest`. |
 | `src/export.ts` | `pp export --html`: a zero-network static snapshot (inline data, CSP-locked). |
 | `src/digest.ts` | `pp digest` (git- or time-based activity diff) and `pp changelog` (release notes per milestone). |
 | `src/setup.ts` | Prepares selected `pp init` writes, validates repo-local paths, and rechecks the preview before applying roadmap and agent-file changes. Writes are atomic per file, not across files. |

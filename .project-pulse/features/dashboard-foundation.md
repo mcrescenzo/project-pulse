@@ -3,7 +3,7 @@ id: dashboard-foundation
 title: Dashboard redesign foundation
 milestone: v2.1
 order: 10
-status: in-progress
+status: shipped
 area: Dashboard
 depends_on: []
 refs:

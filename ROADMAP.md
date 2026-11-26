@@ -357,13 +357,13 @@ Publishes project-pulse to npmjs.com with automated tag-driven releases, provena
 
 ## v2.1 — Read-First Dashboards (`v2.1`)
 
-**Status:** `active` | **Target:** 2026-Q4 | **Progress:** 0/4 features shipped
+**Status:** `active` | **Target:** 2026-Q4 | **Progress:** 3/4 features shipped
 
 Both dashboards answer where the project is, what is at risk, what is blocked and what changed within seconds; edits stay a fast secondary path that never fails silently. Tracked by Beads epic pp-t80.
 
 ### Dashboard redesign foundation (`dashboard-foundation`)
 
-**Status:** `in-progress` | **Area:** Dashboard | **Refs:** `bd:pp-t80.19`
+**Status:** `shipped` | **Area:** Dashboard | **Refs:** `bd:pp-t80.19`
 
 Shared groundwork for the parallel web and TUI redesign PRs.
 
@@ -379,7 +379,7 @@ Shared groundwork for the parallel web and TUI redesign PRs.
 
 ### Web dashboard: Roadmap ledger, Activity and read-first drawer (`dashboard-web`)
 
-**Status:** `in-progress` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.20`
+**Status:** `shipped` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.20`
 
 **Ship Criteria (5/5):**
 - [x] Roadmap ledger with a status distribution bar replaces Milestone Cards and KPI boxes
@@ -390,7 +390,7 @@ Shared groundwork for the parallel web and TUI redesign PRs.
 
 ### TUI: Roadmap ledger, Activity and mode-aware footer (`dashboard-tui`)
 
-**Status:** `in-progress` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.21`
+**Status:** `shipped` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.21`
 
 **Ship Criteria (5/5):**
 - [x] Roadmap ledger with a distribution line replaces Milestone Cards and KPI boxes
@@ -401,9 +401,11 @@ Shared groundwork for the parallel web and TUI redesign PRs.
 
 ### Verify and release v2.1.0 (`dashboard-release`)
 
-**Status:** `planned` | **Area:** Release | **Depends on:** `dashboard-web`, `dashboard-tui` | **Refs:** `bd:pp-t80.22`
+**Status:** `in-progress` | **Area:** Release | **Depends on:** `dashboard-web`, `dashboard-tui` | **Refs:** `bd:pp-t80.22`
 
-**Ship Criteria (0/3):**
-- [ ] Epic acceptance A1–A16 proved end to end on main
-- [ ] README screenshots, CHANGELOG and DESIGN.md match the shipped UI
-- [ ] Version 2.1.0 prepared; publishing left to the maintainer
+**Ship Criteria (3/3):**
+- [x] Epic acceptance A1–A16 proved end to end on main
+- [x] README screenshots, CHANGELOG and DESIGN.md match the shipped UI
+- [x] Version 2.1.0 prepared; publishing left to the maintainer
+
+> **Latest Pulse (2026-11-26T05:47:52.851Z):** 2.1.0 prepared: A1–A16 verified end to end on main a2badd0 (pp-t80.22 notes); README screenshots, CHANGELOG and DESIGN.md updated. Tagging, publishing and registry verification remain with the maintainer, so this feature and milestone v2.1 stay unshipped.

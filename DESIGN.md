@@ -95,14 +95,50 @@ counts use the mono stack (`--font-mono`, `.mono`). No webfonts: the static expo
 | Timestamps | `Nov 25, 18:32` in local time (the year is added when it isn't the current year) |
 | Health | `Check OK`, `1 warning`, `3 warnings`, `1 error`, `2 errors` |
 
+## Status marks
+
+Status is the only colour that means status, and it always comes with a word, so it never depends on
+colour alone.
+
+| Status | Web mark | TUI glyph | Role |
+| --- | --- | --- | --- |
+| planned | hollow dot | `○` | `--st-planned` |
+| in progress | filled dot | `●` | `--st-progress` |
+| shipped | filled dot | `✓` | `--st-shipped` |
+| paused | two bars | `‖` (U+2016, present in common monospace fonts) | `--st-paused` |
+| cut | hollow square | `✕` | `--st-cut` |
+
+## Layout
+
+- **Header**: one line with the project name, summary (one line, full text on hover), the status
+  distribution (counts per status; zero counts take no segment; a click filters by that status),
+  health, Live and the theme control (labelled by its action). The hub navigation sits on its own
+  bar above.
+- **Toolbar**: one line with the view tabs (Roadmap, Graph, Activity), filters capped in width,
+  search, the Deps toggle and a Reset button whose space is reserved so nothing shifts.
+- **Roadmap ledger**: rows grouped by milestone. Columns, in drop order as the window narrows:
+  latest update (below 1200px), area (1040px), needs and Issues (900px), id (720px). Status, title
+  and criteria always stay. Nothing scrolls sideways at 360px or wider.
+- **Drawer**: a sticky header (title, id, Close). The body order is notices (freeze, stale,
+  read-only), status, overview, milestone, Depends on, Unblocks, external refs, criteria, note, and
+  updates.
+- **TUI**: the same order in cells. At 80×24 the ledger row is status mark, title, `n/m` and the
+  first dependency; from 120 columns it adds id, area and latest update. The footer always ends with
+  `? Help · q Quit` (`Esc first: ? Help · q Quit` while typing) and shows only whole hints for the
+  current mode.
+
 ## State copy pattern
 
 Every notice, empty state and error says **what happened, why, and the next action**, in that
-order, in one or two short sentences. Name the control or filter involved.
+order, in one or two short sentences. Name the control or filter involved. The shipped strings:
 
 - Empty, unfiltered: "No features yet." followed by how to add one.
-- Empty, filtered: "No features match status: paused." followed by a **Reset filters** action.
-- Edit freeze: "Editing paused — 2 errors. Fix the roadmap to edit again." followed by a link to
-  the diagnostics.
-- Failed save: "Couldn't save: <reason>." It stays next to the control until dismissed.
-- Load failure: "Couldn't load the roadmap: <reason> (<path>)." followed by **Retry**.
+- Empty, filtered: "No features match status: paused." followed by **Reset filters** (TUI:
+  "c Clear filters").
+- Edit freeze: "Editing paused — 2 errors. The roadmap has errors that block every save. Fix them,
+  then recheck." followed by **Show diagnostics** and **Recheck** (TUI: `e` opens Health).
+- Stale generated file: "ROADMAP.md is out of sync — run pp render (or save any change here)."
+- Failed save: "Couldn't save: <reason>". It stays next to the control until dismissed.
+- Load failure: "Couldn't load the roadmap." with the reason, the request path, and **Retry**.
+- Ship with open criteria: "2 criteria still open. Shipped usually means every criterion is done."
+  followed by **Also mark 2 criteria done**, **Ship anyway** and **Cancel**.

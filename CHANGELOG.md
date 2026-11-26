@@ -1,5 +1,54 @@
 # Project Pulse — Release Notes
 
+## v2.1.0 — Read-first dashboards
+
+Both dashboards now answer where the project is, what's at risk, what's blocked and what changed within seconds. Editing stays a fast secondary path that never fails silently. The store format, CLI flags, MCP tools and security model are unchanged.
+
+### Changed
+- **Roadmap ledger replaces Milestone Cards** on the web dashboard and in the TUI. The first feature is visible within the top third of the window at 1440×900 and 720×900, and within the first ten rows at 80×24.
+  - Each feature is one row under its milestone, with status, title, id, criteria and area. It also shows dependencies, Beads issues (only when the project has `bd:` refs) and the latest update.
+  - A status distribution bar replaces the six KPI boxes and filters by status.
+- **Activity replaces the Status Board**: notes, status changes, completed criteria, and added or shipped features, grouped by day.
+  - Status and criteria changes are dated by the commit that made them. Uncommitted edits are listed first, and the branch is named.
+  - Windows: 7 days, 30 days and, on the web, since your last visit.
+- **Graph** fits the window on open and after every filter change, sizes nodes to their titles, and gives every edge its own arrowhead.
+  - Web: a click pins a trace.
+  - TUI: every horizontal jog gets its own channel row. When nothing fits, an overflow cue appears and `j`/`k` reveal every node.
+- **Static export** (`pp export --html`) renders the ledger and embeds Activity. The embedded window is anchored to the history, so exporting unchanged inputs gives identical bytes.
+- **`pp view` (hub mode)** no longer prints the access token when it opens your browser.
+  - With `--no-open` it prints the short address and the complete authenticated overview URL on its own line.
+  - It says which terminal owns the hub (`Ctrl-C` there stops every project's dashboard), and the hub page names the owning PID.
+- **View names and labels** are shared by both surfaces:
+  - views: Roadmap, Graph, Activity
+  - statuses: planned, in progress, shipped, paused, cut (stored values unchanged)
+  - counts: "n/m criteria"
+  - timestamps: "Nov 25, 18:32"
+  - health: "Check OK", "1 warning", "2 errors"
+- **Design tokens**: one colour-role map per theme, in which status hues never double as system colours. Every text role passes 4.5:1 contrast in both themes (tested). The type scale has six steps, and there are two radii. `prefers-reduced-motion` is honoured. See `DESIGN.md`.
+- **TUI footer** shows the current mode's keys and always ends with `? Help · q Quit` (`Esc first:` while typing). Help and Health size to their content and wrap.
+
+### Added
+- New `SHIPPED_WITH_OPEN_CRITERIA` warning, reported in `pp check`, Health, and the warnings of the write that caused it. It never blocks a write. Drawers offer "Also mark N criteria done", "Ship anyway" or "Cancel" when you ship with open criteria.
+- Explicit edit freeze. When the roadmap already has parse, schema or dependency errors, the CLI prints `Roadmap has N errors; fix them first:` with every error listed, and both drawers say "Editing paused" with a path to the diagnostics. Repair writes and `pp render` keep working. A stale `ROADMAP.md` alone never pauses editing.
+- `GET /api/activity` on the standalone and hub servers.
+- Drawer changes:
+  - saves are acknowledged on the control that changed
+  - failures stay until dismissed
+  - "Unblocks" lists direct dependents
+  - web: a focus trap, and the page behind is inert and scroll-locked
+  - TUI: status pills are keyboard-selectable, and a scroll cue shows when there's more below
+- Web states:
+  - a first-load error with Retry
+  - empty states that name the active filter and offer a reset
+  - per-project tab titles
+- Hub page: warning counts, bottom-aligned actions, paths that wrap only at separators, and a Remove confirmation that explains it only unregisters the project.
+
+### Fixed
+- The status filter, milestone select and reset button no longer overflow or shift the layout.
+- A save made while the drawer is scrolled is no longer reported off-screen.
+- The TUI footer no longer cuts off Help and Quit at 80 columns.
+- The TUI pause glyph renders in common monospace fonts.
+
 ## v2.0.0 — Unified onboarding
 
 - `pp init` replaces `pp setup`. It previews roadmap initialization and lets you opt into `AGENTS.md`, a repo-local skill, and `.mcp.json` independently. Scripts can use `--non-interactive` or `--json` with the `--with-*` flags.
