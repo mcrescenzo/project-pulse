@@ -1040,6 +1040,8 @@ export const DASHBOARD_CLIENT_SCRIPT = `
         delete ctl[key];
       } else {
         ctl[key] = fb;
+        // The next drawer render keeps this acknowledgment on screen (nearest edge, no jump).
+        state.revealFeedback = { fid, key };
         if (fb.kind === "ok") {
           fb.timer = setTimeout(() => {
             if (ctl[key] === fb) {
@@ -1236,6 +1238,16 @@ export const DASHBOARD_CLIENT_SCRIPT = `
         "</div>";
 
       drawer.scrollTop = switched ? 0 : prevScroll;
+      if (state.revealFeedback && state.revealFeedback.fid === feature.id) {
+        const fbEl = drawer.querySelector('[data-feedback="' + CSS.escape(state.revealFeedback.key) + '"]');
+        if (fbEl) {
+          const d = drawer.getBoundingClientRect();
+          const r = fbEl.getBoundingClientRect();
+          if (r.bottom > d.bottom) drawer.scrollTop += r.bottom - d.bottom + 8;
+          else if (r.top < d.top + 72) drawer.scrollTop -= d.top + 72 - r.top;
+        }
+        state.revealFeedback = null;
+      }
 
       const noteInput = document.getElementById("drawer-note-input");
       if (noteInput) {
