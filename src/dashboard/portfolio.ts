@@ -4,7 +4,16 @@ import { EARLY_THEME_SCRIPT, FAVICON_DATA_URL, SHARED_THEME_CSS } from "./theme"
 /**
  * Builds the multi-project hub portfolio overview page served at `/`.
  */
-export function buildPortfolioHtml(): string {
+export interface PortfolioHtmlOptions {
+  /** PID of the process running the hub, shown so people know which terminal owns it. */
+  ownerPid?: number;
+}
+
+export function buildPortfolioHtml(options: PortfolioHtmlOptions = {}): string {
+  const owner =
+    options.ownerPid !== undefined
+      ? `<p class="hub-owner" id="hub-owner">Hub process <span class="mono">PID ${Math.trunc(options.ownerPid)}</span>. The hub runs in the terminal that started it. Ctrl-C in that terminal stops all project dashboards.</p>`
+      : `<p class="hub-owner" id="hub-owner">The hub runs in the terminal that started it. Ctrl-C in that terminal stops all project dashboards.</p>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -114,6 +123,7 @@ export function buildPortfolioHtml(): string {
     }
     .btn-remove:hover { color: var(--danger); border-color: var(--danger); }
     .empty { color: var(--muted); font-style: italic; }
+    .hub-owner { margin: 6px 0 0; color: var(--muted); font-size: var(--fs-sm); }
   </style>
 </head>
 <body>
@@ -122,6 +132,7 @@ export function buildPortfolioHtml(): string {
       <div>
         <h1>Project Pulse Hub</h1>
         <p class="subtitle">Local portfolio overview across your active repository roadmaps.</p>
+        ${owner}
       </div>
       <div class="header-actions">
         <span class="pill pill-live"><span class="dot"></span> Hub Active</span>

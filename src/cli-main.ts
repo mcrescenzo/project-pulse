@@ -868,20 +868,9 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
         }
 
         const hubResult = await joinOrStartHub(rootDir, { port, beadsClient });
-        // Every advertised landing link carries the access token (?t=) so a fresh browser can open
-        // it; the bare overview URL alone is rejected until the token exchange sets the cookie.
-        if (hubResult.mode === "joined") {
-          console.log(
-            `Joined Project Pulse hub at ${hubResult.openUrl} (overview: ${hubResult.overviewUrl})`
-          );
-          if (!noOpen) openBrowser(hubResult.openUrl);
-          return 0;
-        }
-
-        console.log(
-          `Project Pulse hub listening at ${hubResult.overviewUrl} (project: ${hubResult.openUrl})`
-        );
+        for (const line of hubHandoffLines(hubResult, { autoOpen: !noOpen })) console.log(line);
         if (!noOpen) openBrowser(hubResult.openUrl);
+        if (hubResult.mode === "joined") return 0;
         await waitForShutdown(() => hubResult.handle.stop());
         return 0;
       }
@@ -981,6 +970,30 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
     }
     return 1;
   }
+}
+
+/**
+ * What `pp view` prints in hub mode. With auto-open the browser receives the tokenized link, so the
+ * terminal shows only the short address (no access token lands in scrollback). With --no-open the
+ * complete authenticated overview URL is printed whole on its own line so it can be copied; a
+ * fresh browser exchanges its token for a session cookie. Ownership is always stated: the hub
+ * lives in the terminal that started it, and Ctrl-C there stops every project's dashboard.
+ */
+export function hubHandoffLines(
+  result: { mode: "started" | "joined"; url: string; overviewUrl: string; ownerPid: number },
+  options: { autoOpen: boolean }
+): string[] {
+  const lines = [`Dashboard: ${result.url}`];
+  if (!options.autoOpen) {
+    lines.push("Open this link to sign in (it carries this machine's dashboard access token):");
+    lines.push(result.overviewUrl);
+  }
+  lines.push(
+    result.mode === "started"
+      ? `Hub runs in this terminal (PID ${result.ownerPid}); Ctrl-C stops all project dashboards.`
+      : `Joined the hub owned by PID ${result.ownerPid}; Ctrl-C in that terminal stops all project dashboards.`
+  );
+  return lines;
 }
 
 function openBrowser(targetUrl: string): void {

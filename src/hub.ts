@@ -104,6 +104,8 @@ export interface JoinOrStartHubOptions {
 export type JoinOrStartHubResult =
   | {
       mode: "started";
+      /** PID of the process running the hub (this one, for a started hub). */
+      ownerPid: number;
       slug: string;
       port: number;
       url: string;
@@ -114,6 +116,8 @@ export type JoinOrStartHubResult =
     }
   | {
       mode: "joined";
+      /** PID of the terminal process that owns the running hub. */
+      ownerPid: number;
       slug: string;
       port: number;
       url: string;
@@ -340,7 +344,7 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
     return items.sort((a, b) => a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug));
   };
 
-  const portfolioHtml = buildPortfolioHtml();
+  const portfolioHtml = buildPortfolioHtml({ ownerPid: process.pid });
   let stopped = false;
 
   const isTokenAuthorized = (req: Request): boolean | null => {
@@ -709,6 +713,7 @@ export async function joinOrStartHub(
     const projectPath = `/p/${encodeURIComponent(regJson.slug)}`;
     return {
       mode: "joined",
+      ownerPid: lockFile.pid,
       slug: regJson.slug,
       port,
       url: `${hubBase}${projectPath}`,
@@ -739,6 +744,7 @@ export async function joinOrStartHub(
   const projectPath = `/p/${encodeURIComponent(record.slug)}`;
   return {
     mode: "started",
+    ownerPid: process.pid,
     slug: record.slug,
     port: handle.port,
     url: `${handle.url}${projectPath}`,

@@ -115,10 +115,18 @@ Flag values that would look like options are passed with `=` syntax (for example
 
 `pp view` starts a local hub on `http://127.0.0.1:4310`, or joins one that's already running, and opens your project at `/p/<repo>`. Run it in several repositories and they all appear on the hub's overview page. `--standalone` runs a single-project server instead.
 
+The hub runs in the foreground of the terminal that started it. `pp view` in another repository joins that hub and exits at once, printing the owner's PID. Ctrl-C in the owning terminal stops every project's dashboard; the hub's overview page says which process owns it.
+
+```text
+$ pp view
+Dashboard: http://127.0.0.1:4310/p/my-app
+Hub runs in this terminal (PID 81234); Ctrl-C stops all project dashboards.
+```
+
 The dashboard is protected by an **access token**:
-- Every URL `pp view` prints (in `--no-open` mode or otherwise) ends in `?t=<token>`: your project's `/p/<repo>` link, the hub's portfolio overview link (`/?t=<token>`), and the standalone dashboard link.
-- Your browser exchanges that token for a session cookie, so bookmarks keep working afterwards. Any printed link works in a fresh browser; opening the bare overview URL without the token shows the access-required page until the cookie is set.
-- With `--no-open`, copy any printed URL into your browser.
+- When `pp view` opens your browser, it hands the browser the tokenized link (`…?t=<token>`) and prints only the short address, so the token never lands in your scrollback.
+- With `--no-open`, it prints the short address and then the complete authenticated overview link (`http://127.0.0.1:4310/?t=<token>`) whole on its own line; copy that line into a browser. `--standalone` prints its own tokenized dashboard link.
+- Your browser exchanges that token for a session cookie, so bookmarks keep working afterwards. Opening the bare address without the token shows the access-required page until the cookie is set.
 - The token is stored at `~/.config/project-pulse/access-token` (mode 0600); set `PROJECT_PULSE_HOME` to move it. To rotate it, stop all dashboard processes, delete that file, and start `pp view` again: the restart mints and persists a fresh token, and old `?t=` links and cookies stop working. A server running while the file is deleted captured the token at startup, so it keeps honoring old links and cookies until it exits; restarting without deleting preserves the token.
 
 See [SECURITY.md](SECURITY.md) for the full model.

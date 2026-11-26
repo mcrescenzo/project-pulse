@@ -368,44 +368,49 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
           env: { PROJECT_PULSE_HOME: stateDir },
         });
 
-      // Initial start prints two links (overview + project); joining prints the same pair.
+      // Start and join each print the short address (no token) and the complete authenticated
+      // overview URL whole on its own line, plus who owns the hub.
       const startProc = spawnView(["--root", repoA, "--port", "0"]);
       try {
-        const startOut = await readStdoutUntil(startProc, "Project Pulse hub listening at ");
-        const startUrls = startOut.match(/https?:\/\/[^\s)]+/g) ?? [];
-        expect(startUrls).toHaveLength(2);
-        const startPort = new URL(startUrls[0]!).port;
+        const startOut = await readStdoutUntil(startProc, "Ctrl-C stops all project dashboards.");
+        const persistentToken = readFileSync(join(stateDir, "access-token"), "utf8").trim();
+        const startLines = startOut.split("\n");
+        const startAddress = startLines.find((l) => l.startsWith("Dashboard: "))!;
+        expect(startAddress).toMatch(/^Dashboard: http:\/\/127\.0\.0\.1:\d+\/p\/link-start$/);
+        expect(startAddress).not.toContain(persistentToken);
+        const startUrlLines = startLines.filter((l) => /^https?:\/\//.test(l));
+        expect(startUrlLines).toHaveLength(1);
+        expect(startLines).toContain(`Hub runs in this terminal (PID ${startProc.child.pid}); Ctrl-C stops all project dashboards.`);
+        const startPort = new URL(startUrlLines[0]!).port;
 
         const joinProc = spawnView(["--root", repoB, "--port", startPort]);
-        const joinOut = await readStdoutUntil(joinProc, "Joined Project Pulse hub at ");
+        const joinOut = await readStdoutUntil(joinProc, "Ctrl-C in that terminal stops all project dashboards.");
         expect(await joinProc.exited).toBe(0);
-        const joinUrls = joinOut.match(/https?:\/\/[^\s)]+/g) ?? [];
-        expect(joinUrls).toHaveLength(2);
+        const joinLines = joinOut.split("\n");
+        expect(joinLines.find((l) => l.startsWith("Dashboard: "))).toBe(`Dashboard: http://127.0.0.1:${startPort}/p/link-join`);
+        const joinUrlLines = joinLines.filter((l) => /^https?:\/\//.test(l));
+        expect(joinUrlLines).toHaveLength(1);
+        expect(joinLines).toContain(
+          `Joined the hub owned by PID ${startProc.child.pid}; Ctrl-C in that terminal stops all project dashboards.`
+        );
 
-        // Every advertised link carries the persistent access token for the ?t= cookie exchange,
-        // and each opens the right page in a fresh browser context (no pre-set cookie).
-        const persistentToken = readFileSync(join(stateDir, "access-token"), "utf8").trim();
-        const featureByPath: Record<string, string> = {
-          "/p/link-start": "feat-start",
-          "/p/link-join": "feat-join",
-        };
         browser = await chromium.launch({ executablePath: CHROMIUM_PATH! });
-        for (const url of [...startUrls, ...joinUrls]) {
+        for (const url of [...startUrlLines, ...joinUrlLines]) {
           const advertised = new URL(url);
+          expect(advertised.pathname).toBe("/");
           expect(advertised.searchParams.get("t")).toBe(persistentToken);
 
+          // A fresh browser (no cookie) lands on the hub overview via the ?t= cookie exchange.
           const context = await browser.newContext();
           const page = await context.newPage();
           try {
             await page.goto(url, { waitUntil: "networkidle" });
             expect(new URL(page.url()).search).toBe("");
-            const featureId = featureByPath[new URL(page.url()).pathname];
-            if (featureId) {
-              await page.waitForSelector(`.card[data-feature-id="${featureId}"]`);
-            } else {
-              await page.waitForSelector('.project-card[data-project-slug="link-start"]');
-              await page.waitForSelector('.project-card[data-project-slug="link-join"]');
-            }
+            await page.waitForSelector('.project-card[data-project-slug="link-start"]');
+            await page.waitForSelector('.project-card[data-project-slug="link-join"]');
+            expect(await page.locator("#hub-owner").textContent()).toBe(
+              `Hub process PID ${startProc.child.pid}. The hub runs in the terminal that started it. Ctrl-C in that terminal stops all project dashboards.`
+            );
           } finally {
             await context.close();
           }
@@ -435,13 +440,14 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     ]);
     expect(joinErr).toBe("");
     expect(joinCode).toBe(0);
-    expect(joinOut).toContain(
-      `Joined Project Pulse hub at http://127.0.0.1:${hub.port}/p/cli-hub-a?t=${hub.accessToken}`
-    );
-    // Every advertised landing link is tokenized, overview included, so a fresh browser can open
-    // each one via the ?t= cookie exchange; the raw overview URL is never advertised as a link.
-    expect(joinOut).toContain(`(overview: http://127.0.0.1:${hub.port}/?t=${hub.accessToken})`);
-    expect(joinOut).not.toContain(`(overview: http://127.0.0.1:${hub.port}/)`);
+    // --no-open: short address, then the full tokenized overview URL alone on its own line.
+    expect(joinOut.split("\n")).toEqual([
+      `Dashboard: http://127.0.0.1:${hub.port}/p/cli-hub-a`,
+      "Open this link to sign in (it carries this machine's dashboard access token):",
+      `http://127.0.0.1:${hub.port}/?t=${hub.accessToken}`,
+      `Joined the hub owned by PID ${process.pid}; Ctrl-C in that terminal stops all project dashboards.`,
+      "",
+    ]);
 
     // 2. CLI pp view --standalone starts isolated server cleanly even with --port
     const standaloneProc = spawnCli(
