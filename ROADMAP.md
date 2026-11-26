@@ -354,3 +354,54 @@ Publishes project-pulse to npmjs.com with automated tag-driven releases, provena
 - [x] Verifies single-command npx project-pulse and npm i -g project-pulse on fresh Node.js and Bun environments
 
 > **Latest Pulse (2026-11-24T16:42:52.509Z):** Stable npm release verified (2026-11-24): project-pulse@1.0.1 published via GitHub Actions run 45438992543 from v1.0.1 at 0e34e7a20efe8d92076b47e27a61f9508568a07b. Public registry latest=1.0.1, next=1.0.0-rc.1. Downloaded tarball matched CI and local artifact byte for byte; SRI sha512-yPaiDsBHP0v6cucU0Y8GAOMpuZX+gxJQyWafMjnXSUS8LjhR9AGXWNqcMzcnh/OBwBJuv0K3VgocaCtAN7NsqQ==. npm audit signatures verified npm signatures and SLSA provenance; the subject digest matched the tarball and the source matched that tag and commit (Sigstore log index 4082487925). Both pinned and unversioned registry installs passed on Node 24.0.0 and 24.22.2 without Bun, and Bun 1.3.0 without Node. Both CLI aliases, persisted note readback, roadmap check, and MCP initialize passed. The stable release is 1.0.1; v1.0.0 was not moved.
+
+## v2.1 — Read-First Dashboards (`v2.1`)
+
+**Status:** `active` | **Target:** 2026-Q4 | **Progress:** 0/4 features shipped
+
+Both dashboards answer where the project is, what is at risk, what is blocked and what changed within seconds; edits stay a fast secondary path that never fails silently. Tracked by Beads epic pp-t80.
+
+### Dashboard redesign foundation (`dashboard-foundation`)
+
+**Status:** `in-progress` | **Area:** Dashboard | **Refs:** `bd:pp-t80.19`
+
+Shared groundwork for the parallel web and TUI redesign PRs.
+
+**Ship Criteria (0/6):**
+- [ ] Dashboard source split into modules that still produce one HTML string
+- [ ] Design tokens with a contrast test in both themes, and DESIGN.md
+- [ ] Shared presentation labels and formats used by web and TUI
+- [ ] SHIPPED_WITH_OPEN_CRITERIA warning and an explicit CLI edit-freeze message
+- [ ] Activity event provider and /api/activity with an Uncommitted group
+- [ ] pp view prints a token-free hub handoff and states hub ownership
+
+### Web dashboard: Roadmap ledger, Activity and read-first drawer (`dashboard-web`)
+
+**Status:** `planned` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.20`
+
+**Ship Criteria (0/5):**
+- [ ] Roadmap ledger with a status distribution bar replaces Milestone Cards and KPI boxes
+- [ ] Drawer acknowledges saves on the control, states the edit freeze and confirms shipping with open criteria
+- [ ] Activity view replaces the Status Board
+- [ ] Graph fits on open and pins traces on click
+- [ ] Load-error, empty states and hub page fixes
+
+### TUI: Roadmap ledger, Activity and mode-aware footer (`dashboard-tui`)
+
+**Status:** `planned` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.21`
+
+**Ship Criteria (0/5):**
+- [ ] Roadmap ledger with a distribution line replaces Milestone Cards and KPI boxes
+- [ ] Activity view replaces the Status Board
+- [ ] Graph fits on open and gives every edge its own channel
+- [ ] Footer always ends with Help and Quit at 80 columns, with wrapped help and expiring toasts
+- [ ] Drawer feedback on the control, edit-freeze notice, ship confirm and Unblocks
+
+### Verify and release v2.1.0 (`dashboard-release`)
+
+**Status:** `planned` | **Area:** Release | **Depends on:** `dashboard-web`, `dashboard-tui` | **Refs:** `bd:pp-t80.22`
+
+**Ship Criteria (0/3):**
+- [ ] Epic acceptance A1–A16 proved end to end on main
+- [ ] README screenshots, CHANGELOG and DESIGN.md match the shipped UI
+- [ ] Version 2.1.0 prepared; publishing left to the maintainer
