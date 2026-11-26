@@ -367,13 +367,15 @@ Both dashboards answer where the project is, what is at risk, what is blocked an
 
 Shared groundwork for the parallel web and TUI redesign PRs.
 
-**Ship Criteria (0/6):**
-- [ ] Dashboard source split into modules that still produce one HTML string
-- [ ] Design tokens with a contrast test in both themes, and DESIGN.md
-- [ ] Shared presentation labels and formats used by web and TUI
-- [ ] SHIPPED_WITH_OPEN_CRITERIA warning and an explicit CLI edit-freeze message
-- [ ] Activity event provider and /api/activity with an Uncommitted group
-- [ ] pp view prints a token-free hub handoff and states hub ownership
+**Ship Criteria (6/6):**
+- [x] Dashboard source split into modules that still produce one HTML string
+- [x] Design tokens with a contrast test in both themes, and DESIGN.md
+- [x] Shared presentation labels and formats used by web and TUI
+- [x] SHIPPED_WITH_OPEN_CRITERIA warning and an explicit CLI edit-freeze message
+- [x] Activity event provider and /api/activity with an Uncommitted group
+- [x] pp view prints a token-free hub handoff and states hub ownership
+
+> **Latest Pulse (2026-11-26T04:40:28.787Z):** Foundation landed on work/dashboard-foundation: module split, tokens + DESIGN.md, src/present.ts, SHIPPED_WITH_OPEN_CRITERIA, RoadmapFrozenError + editable/stale flags, /api/activity, token-free hub handoff.
 
 ### Web dashboard: Roadmap ledger, Activity and read-first drawer (`dashboard-web`)
 
