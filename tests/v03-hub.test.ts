@@ -457,7 +457,8 @@ describe("v0.3 Auto-Joining Multi-Project Local Hub", () => {
     const reader = standaloneProc.stdout.getReader();
     const decoder = new TextDecoder();
     let out = "";
-    while (!out.includes("Project Pulse dashboard listening at ")) {
+    // Read until the whole tokenized URL has arrived; stdout chunks can split it mid-line.
+    while (!/listening at http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{64}/.test(out)) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       out += decoder.decode(value, { stream: true });

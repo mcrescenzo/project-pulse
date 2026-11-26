@@ -57,7 +57,10 @@ export function startHttpServer(options: HttpServerOptions): Promise<HttpServerH
     // 25s keeps live dashboards open); Node needs an explicit per-socket idle timeout.
     socket.setTimeout(idleTimeoutMs);
     socket.on("timeout", () => socket.destroy());
-    socket.on("close", () => sockets.delete(socket));
+    socket.on("close", () => {
+      sockets.delete(socket);
+      activeSockets.delete(socket);
+    });
   });
 
   // Sockets with an in-flight response (SSE streams included). Idle keep-alive sockets are
@@ -67,8 +70,9 @@ export function startHttpServer(options: HttpServerOptions): Promise<HttpServerH
   server.on("request", (req, res) => {
     const socket = req.socket;
     activeSockets.add(socket);
+    // Cleared when the response ends; the connection handler also clears it when the socket
+    // closes (registering a socket listener per request would leak on keep-alive sockets).
     res.once("close", () => activeSockets.delete(socket));
-    socket.on("close", () => activeSockets.delete(socket));
   });
 
   const { promise: listening, resolve: onListening, reject: onListenError } = Promise.withResolvers<void>();
