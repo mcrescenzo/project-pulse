@@ -156,7 +156,11 @@ export const DASHBOARD_CSS = `
     .ledger th.c-title:last-child { width: auto; }
     @media (max-width: 1200px) { .ledger th.c-title { width: auto; } }
     @media (max-width: 900px) {
-      .topbar { gap: var(--sp-2) var(--sp-3); }
+      .topbar { gap: var(--sp-2) var(--sp-3); padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+      .toolbar { padding-top: var(--sp-1); padding-bottom: var(--sp-1); gap: var(--sp-2); }
+      .dist-bar { display: none; }
+      .ledger th { padding-top: var(--sp-1); padding-bottom: var(--sp-1); }
+      .ledger tr.group td { padding-top: var(--sp-2); padding-bottom: var(--sp-1); }
       .topbar-right { flex: 1 1 100%; justify-content: flex-start; }
       .dist { flex: 1 1 200px; flex-wrap: nowrap; }
       .dist-legend { min-width: 0; }

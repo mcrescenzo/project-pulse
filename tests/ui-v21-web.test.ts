@@ -485,6 +485,9 @@ describeUi("web Graph", () => {
       await page.waitForSelector("#drawer-backdrop.open");
       await page.keyboard.press("Escape");
       await page.waitForFunction(() => !document.getElementById("drawer-backdrop")!.classList.contains("open"));
+      // Move the pointer off every node so hover tracing cannot re-light g06, then Esc releases.
+      const vpBox = (await page.locator("#graph-viewport").boundingBox())!;
+      await page.mouse.move(vpBox.x + 3, vpBox.y + vpBox.height - 3);
       await page.keyboard.press("Escape");
       expect(await g06.getAttribute("class")).not.toContain("is-pinned");
       expect(await g06.getAttribute("class")).not.toContain("is-active");
