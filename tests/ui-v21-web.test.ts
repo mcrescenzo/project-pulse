@@ -174,17 +174,18 @@ describeUi("web drawer", () => {
       // scroll the drawer to the bottom, then toggle the last criterion
       await page.locator("#drawer").evaluate((el) => (el.scrollTop = el.scrollHeight));
       const lastId = svc.load().features.find((f) => f.id === "realtime-collab")!.ship_criteria[5]!.id;
-      await page.locator(`#drawer input[data-criterion-id="${lastId}"]`).scrollIntoViewIfNeeded();
-      await page.locator(`#drawer input[data-criterion-id="${lastId}"]`).check();
+      // Locator actions re-resolve and scroll on their own, so a live re-render cannot detach them.
+      await page.locator(`#drawer input[data-criterion-id="${lastId}"]`).click();
       await page.waitForSelector(`#drawer [data-feedback="crit:${lastId}"].is-ok`);
       expect(await inViewport(page, `#drawer [data-feedback="crit:${lastId}"]`)).toBe(true);
       expect(svc.load().features.find((f) => f.id === "realtime-collab")!.ship_criteria[5]!.done).toBe(true);
 
-      await page.locator("#drawer-note-input").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(400); // let the live reload from the save settle
       await page.locator("#drawer-note-input").fill("Logged from a scrolled drawer");
       await page.locator("#drawer-note-submit").click();
       await page.waitForSelector('#drawer [data-feedback="note"].is-ok');
       expect(await inViewport(page, '#drawer [data-feedback="note"]')).toBe(true);
+      await page.waitForTimeout(400);
       expect(await page.locator("#drawer").evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
 
       // A failed save stays next to its control, through re-renders, until dismissed.
