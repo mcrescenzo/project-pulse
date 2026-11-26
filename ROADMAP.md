@@ -379,14 +379,14 @@ Shared groundwork for the parallel web and TUI redesign PRs.
 
 ### Web dashboard: Roadmap ledger, Activity and read-first drawer (`dashboard-web`)
 
-**Status:** `planned` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.20`
+**Status:** `in-progress` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.20`
 
-**Ship Criteria (0/5):**
-- [ ] Roadmap ledger with a status distribution bar replaces Milestone Cards and KPI boxes
-- [ ] Drawer acknowledges saves on the control, states the edit freeze and confirms shipping with open criteria
-- [ ] Activity view replaces the Status Board
-- [ ] Graph fits on open and pins traces on click
-- [ ] Load-error, empty states and hub page fixes
+**Ship Criteria (5/5):**
+- [x] Roadmap ledger with a status distribution bar replaces Milestone Cards and KPI boxes
+- [x] Drawer acknowledges saves on the control, states the edit freeze and confirms shipping with open criteria
+- [x] Activity view replaces the Status Board
+- [x] Graph fits on open and pins traces on click
+- [x] Load-error, empty states and hub page fixes
 
 ### TUI: Roadmap ledger, Activity and mode-aware footer (`dashboard-tui`)
 
