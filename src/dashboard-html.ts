@@ -5,6 +5,7 @@ import type {
   PulseConfig,
   ValidationIssue,
 } from "./types";
+import type { ActivityResult } from "./activity";
 
 import { DASHBOARD_CLIENT_SCRIPT } from "./dashboard/client";
 import { PRESENT_CLIENT_JS, statusLabel, VIEW_LABELS } from "./present";
@@ -22,8 +23,16 @@ export interface RoadmapViewPayload {
     ok: boolean;
     errors: ValidationIssue[];
     warnings: ValidationIssue[];
+    /** False when write-blocking errors (parse, schema, dependency) freeze editing. */
+    editable?: boolean;
+    /** The errors behind `editable: false`. */
+    blocking?: ValidationIssue[];
+    /** ROADMAP.md is stale; editing still works and `pp render` (or any write) fixes it. */
+    stale?: boolean;
   };
   beads: Record<string, BeadStatusInfo[]>;
+  /** Precomputed Activity for static exports (live pages fetch /api/activity instead). */
+  activity?: ActivityResult;
 }
 
 export interface DashboardHtmlOptions {

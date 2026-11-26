@@ -1,6 +1,7 @@
 import { readdirSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { CliBeadsClient, type BeadsClient } from "./beads";
+import { activityCacheKey, buildActivity, type ActivityResult } from "./activity";
 import { buildDashboardHtml, FAVICON_SVG, type RoadmapViewPayload } from "./dashboard-html";
 import { buildAllowedHosts, buildOpenUrl, forbiddenHostResponse, generateAccessToken, handleTokenLanding, isAccessAuthorized, isAllowedHost, redactPaths, unauthorizedResponse, withSecurityHeaders } from "./http-security";
 import { startHttpServer } from "./http-server";
@@ -32,6 +33,8 @@ export interface ProjectSlot {
   broadcastReload: (reason?: string) => void;
   getPayload: () => Promise<RoadmapViewPayload>;
   handleRoadmap: () => Promise<Response>;
+  /** GET /api/activity?since=7d — dated roadmap events (see src/activity.ts). */
+  handleActivity: (url: URL) => Response;
   handleEvents: () => Response;
   handlePulse: (
     req: Request,
@@ -130,6 +133,9 @@ export async function buildRoadmapViewPayload(
       ok: check.ok,
       errors: check.errors,
       warnings: check.warnings,
+      editable: check.editable ?? check.ok,
+      blocking: check.blocking ?? check.errors,
+      stale: check.stale ?? false,
     },
     // Null prototype (pp-f7m.29): dashboard lookups like `beads[f.id]` must yield undefined —
     // not an inherited Object.prototype member — for legal feature ids such as 'constructor'.
@@ -426,6 +432,29 @@ export function createProjectSlot(
     }
   };
 
+  const activityCache = new Map<string, ActivityResult>();
+  const handleActivity = (url: URL): Response => {
+    const since = url.searchParams.get("since") ?? undefined;
+    if (since !== undefined && (since.length > 64 || !/^[\w.:+\-/]+$/.test(since))) {
+      return Response.json({ ok: false, error: "Invalid 'since' value" }, { status: 400 });
+    }
+    try {
+      const key = activityCacheKey(service, since);
+      let result = activityCache.get(key);
+      if (!result) {
+        result = buildActivity(service, { since });
+        activityCache.set(key, result);
+        // Keep the cache small: a handful of windows per revision is plenty.
+        while (activityCache.size > 16) activityCache.delete(activityCache.keys().next().value!);
+      }
+      return Response.json({ ok: true, ...result });
+    } catch (error) {
+      const message = redactPaths((error as Error).message);
+      const status = /Unknown --since value/.test(message) ? 400 : 500;
+      return Response.json({ ok: false, error: message }, { status });
+    }
+  };
+
   const handleEvents = (): Response => {
     let clientController: ReadableStreamDefaultController<Uint8Array> | null = null;
     const stream = new ReadableStream<Uint8Array>({
@@ -533,6 +562,7 @@ export function createProjectSlot(
     broadcastReload,
     getPayload,
     handleRoadmap,
+    handleActivity,
     handleEvents,
     handlePulse,
     close,
@@ -591,6 +621,10 @@ export async function startViewServer(
 
     if (req.method === "GET" && url.pathname === "/api/events") {
       return slot.handleEvents();
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/activity") {
+      return slot.handleActivity(url);
     }
 
     const pulseMatch = url.pathname.match(/^\/api\/features\/([^/]+)\/pulse$/);

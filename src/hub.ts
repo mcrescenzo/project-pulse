@@ -511,6 +511,10 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
         return slot.handleEvents();
       }
 
+      if (req.method === "GET" && subpath === "/api/activity") {
+        return slot.handleActivity(url);
+      }
+
       const pulseMatch = subpath.match(/^\/api\/features\/([^/]+)\/pulse$/);
       if (req.method === "POST" && pulseMatch) {
         return slot.handlePulse(req, pulseMatch[1]!, boundPort, hostname);

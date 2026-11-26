@@ -1,7 +1,6 @@
-import { spawnSync } from "node:child_process";
-import { parseMarkdownFile } from "./frontmatter";
+import { loadFeaturesAtCommit, runGit } from "./git-history";
 import { sortFeatures, sortMilestones } from "./renderer";
-import { FEATURES_DIR_NAME, PULSE_DIR_NAME, RoadmapService } from "./store";
+import { RoadmapService } from "./store";
 import type { Feature, FeatureStatus, Milestone } from "./types";
 
 export interface SinceSpec {
@@ -138,81 +137,6 @@ export function parseSinceSpec(raw?: string, now: Date = new Date()): SinceSpec 
   };
 }
 
-function runGit(args: string[], cwd: string): { ok: boolean; stdout: string; stderr: string } {
-  try {
-    const proc = spawnSync("git", args, { cwd, encoding: "utf8" });
-    const stdout = (proc.stdout ?? "").trimEnd();
-    const stderr = (proc.stderr ?? "").trimEnd();
-    return { ok: proc.status === 0, stdout, stderr };
-  } catch (error) {
-    return { ok: false, stdout: "", stderr: (error as Error).message };
-  }
-}
-
-function loadBaselineFeaturesFromCommit(
-  commit: string,
-  rootDir: string
-): Map<string, Feature> {
-  const out = new Map<string, Feature>();
-  const featureRelDir = `${PULSE_DIR_NAME}/${FEATURES_DIR_NAME}`;
-  // `git show <commit>:<path>` below resolves <path> from the repository root, so ls-tree must
-  // report repository-root-relative paths (--full-name). Without it, a rootDir nested inside the
-  // repository (e.g. repo/pkg/a) yields cwd-relative paths: the show resolves against the wrong
-  // tree and the baseline silently comes back empty, or picks up another project's
-  // identically-named feature files.
-  const tree = runGit(
-    ["ls-tree", "-r", "--name-only", "--full-name", commit, "--", featureRelDir],
-    rootDir
-  );
-  if (!tree.ok || !tree.stdout.trim()) return out;
-
-  for (const relPath of tree.stdout.split("\n").map((s) => s.trim()).filter(Boolean)) {
-    if (!relPath.endsWith(".md") || relPath.includes("/.tmp.")) continue;
-    const show = runGit(["show", `${commit}:${relPath}`], rootDir);
-    if (!show.ok) continue;
-    try {
-      const parsed = parseMarkdownFile(show.stdout);
-      const fm = parsed.frontmatter;
-      const fallbackId = relPath.split("/").pop()!.slice(0, -3);
-      const id = typeof fm.id === "string" && fm.id.trim() ? fm.id : fallbackId;
-      const criteria = Array.isArray(fm.ship_criteria)
-        ? fm.ship_criteria
-            .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === "object"))
-            .map((c, idx) => ({
-              id: typeof c.id === "string" ? c.id : `c-${idx + 1}`,
-              text: typeof c.text === "string" ? c.text : "",
-              done: Boolean(c.done),
-            }))
-        : [];
-      const updates = Array.isArray(fm.updates)
-        ? fm.updates
-            .filter((u): u is Record<string, unknown> => Boolean(u && typeof u === "object"))
-            .map((u) => ({
-              at: typeof u.at === "string" ? u.at : "",
-              note: typeof u.note === "string" ? u.note : "",
-            }))
-        : [];
-      out.set(id, {
-        id,
-        title: typeof fm.title === "string" ? fm.title : id,
-        milestone: typeof fm.milestone === "string" ? fm.milestone : "",
-        order: typeof fm.order === "number" ? fm.order : Number(fm.order ?? 100),
-        status: (typeof fm.status === "string" ? fm.status : "planned") as FeatureStatus,
-        area: typeof fm.area === "string" && fm.area ? fm.area : undefined,
-        depends_on: Array.isArray(fm.depends_on) ? fm.depends_on.map(String) : [],
-        refs: Array.isArray(fm.refs) ? fm.refs.map(String) : [],
-        ship_criteria: criteria,
-        updates,
-        description: parsed.body,
-      });
-    } catch {
-      // Ignore historical malformed file gracefully
-    }
-  }
-
-  return out;
-}
-
 function toBrief(f: Feature): DigestFeatureBrief {
   return {
     id: f.id,
@@ -343,7 +267,7 @@ export function buildDigest(
     const dateRes = runGit(["show", "-s", "--format=%cI", sha], service.rootDir);
     const commitDate = dateRes.ok ? dateRes.stdout.trim() : undefined;
     gitBaseline = { available: true, isGitRepo: true, commit: sha, commitDate };
-    baselineMap = loadBaselineFeaturesFromCommit(sha, service.rootDir);
+    baselineMap = loadFeaturesAtCommit(sha, service.rootDir);
   } else if (!isGitRepo) {
     gitBaseline = {
       available: false,
@@ -378,7 +302,7 @@ export function buildDigest(
           commit: sha,
           commitDate: dateRes.ok ? dateRes.stdout.trim() : undefined,
         };
-        baselineMap = loadBaselineFeaturesFromCommit(sha, service.rootDir);
+        baselineMap = loadFeaturesAtCommit(sha, service.rootDir);
       }
     }
   }
