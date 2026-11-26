@@ -1,7 +1,8 @@
 import type { BeadStatusInfo, Feature, FeatureStatus, Milestone, ValidationIssue } from "../types";
 import type { RoadmapViewPayload } from "../dashboard-html";
+import type { ActivityResult } from "../activity";
 import { formatCriteria, healthText, statusLabel, VIEW_LABELS } from "../present";
-import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, type CellStyle, type PaletteColor } from "./screen";
+import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, wrapCells, type CellStyle, type PaletteColor } from "./screen";
 
 /**
  * Hit-test z layers mirroring overlay paint order in TuiController.render():
@@ -21,7 +22,7 @@ export const HitLayer = {
   helpControl: 72,
 } as const;
 
-export type TuiViewMode = "cards" | "graph" | "board";
+export type TuiViewMode = "roadmap" | "graph" | "activity";
 export type PickerKind = "milestone" | "status" | "area";
 export type GraphZoomLevel = "full" | "compact" | "overview";
 
@@ -44,12 +45,29 @@ export interface TuiFeedback {
   message: string;
 }
 
+/** Feedback shown on the drawer control that changed: "status", "crit:<id>", "note" or "freeze". */
+export interface ControlFeedback extends TuiFeedback {
+  key: string;
+}
+
+export type ActivityWindow = "7d" | "30d";
+
+export interface ActivityCache {
+  key: string;
+  result: ActivityResult | null;
+  error: string | null;
+}
+
 export interface GraphCameraState {
   zoom: GraphZoomLevel;
   tx: number;
   ty: number;
   initialized: boolean;
   layoutKey: string;
+  /** Overview node-width cap chosen by Fit so wide layers fit the viewport. */
+  nodeWCap?: number;
+  /** True when no density fits the viewport: an overflow cue shows and j/k pan to each node. */
+  overflow?: boolean;
 }
 
 export interface TuiState {
@@ -68,11 +86,17 @@ export interface TuiState {
   drawerScrollY: number;
   drawerFocus: "status" | "criteria" | "note";
   drawerCriterionIndex: number;
+  /** Status pill focused while drawerFocus is "status" (index into FEATURE_STATUSES). */
+  drawerStatusIndex: number;
+  /** Ship confirmation open for this feature; `choice` is the focused option. */
+  pendingShip: { featureId: string; choice: number } | null;
   noteDrafts: Record<string, string>;
   noteCursor: number;
-  cardsScrollY: number;
-  boardScrollY: Record<string, number>;
-  boardActiveCol: number;
+  roadmapScrollY: number;
+  activityWindow: ActivityWindow;
+  activityScrollY: number;
+  activitySelectedIndex: number;
+  activity: ActivityCache | null;
   openPicker: OpenPicker | null;
   pickerSelectedIndex: number;
   /** First visible row of the floating picker (wheel offset; snapped to keyboard focus at render). */
@@ -89,7 +113,7 @@ export interface TuiState {
   /** Message from the most recent failed disk reload; null once a reload succeeds again. */
   loadError: string | null;
   toast: TuiFeedback | null;
-  drawerFeedback: TuiFeedback | null;
+  drawerFeedback: ControlFeedback | null;
   noBeads: boolean;
 }
 
@@ -124,7 +148,8 @@ export function getStatusStyle(status: string): StatusStyle {
     case "active":
       return { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, icon: "●" };
     case "paused":
-      return { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft, icon: "⏸" };
+      // U+2016 renders in common monospace fonts (U+23F8 is missing from many).
+      return { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft, icon: "‖" };
     case "cut":
     case "archived":
     case "missing":
@@ -140,7 +165,7 @@ export function createInitialTuiState(
 ): TuiState {
   return {
     payload,
-    viewMode: "cards",
+    viewMode: "roadmap",
     milestoneFilter: "",
     statusFilter: "",
     areaFilter: "",
@@ -149,16 +174,20 @@ export function createInitialTuiState(
     showDeps: true,
     healthPanelOpen: false,
     helpOpen: false,
-    selectedFeatureId: payload.features[0]?.id ?? null,
+    selectedFeatureId: null,
     drawerFeatureId: null,
     drawerScrollY: 0,
     drawerFocus: "criteria",
     drawerCriterionIndex: 0,
+    drawerStatusIndex: 0,
+    pendingShip: null,
     noteDrafts: {},
     noteCursor: 0,
-    cardsScrollY: 0,
-    boardScrollY: {},
-    boardActiveCol: 0,
+    roadmapScrollY: 0,
+    activityWindow: "7d",
+    activityScrollY: 0,
+    activitySelectedIndex: 0,
+    activity: null,
     openPicker: null,
     pickerSelectedIndex: 0,
     pickerScrollY: 0,
@@ -414,15 +443,15 @@ class ClipWriter {
 }
 
 const VIEW_TABS_FULL: Array<{ id: TuiViewMode; label: string }> = [
-  { id: "cards", label: `1 ${VIEW_LABELS.roadmap}` },
+  { id: "roadmap", label: `1 ${VIEW_LABELS.roadmap}` },
   { id: "graph", label: `2 ${VIEW_LABELS.graph}` },
-  { id: "board", label: "3 Board" },
+  { id: "activity", label: `3 ${VIEW_LABELS.activity}` },
 ];
 
 const VIEW_TABS_COMPACT: Array<{ id: TuiViewMode; label: string }> = [
-  { id: "cards", label: `1 ${VIEW_LABELS.roadmap}` },
+  { id: "roadmap", label: `1 ${VIEW_LABELS.roadmap}` },
   { id: "graph", label: `2 ${VIEW_LABELS.graph}` },
-  { id: "board", label: "3 Board" },
+  { id: "activity", label: `3 ${VIEW_LABELS.activity}` },
 ];
 
 function measurePillRowWidth(labels: string[]): number {
@@ -456,7 +485,7 @@ function drawViewTabs(
   }
 }
 
-export function renderHeaderAndKpis(
+export function renderHeader(
   buf: ScreenBuffer,
   width: number,
   state: TuiState,
@@ -555,103 +584,93 @@ export function renderHeaderAndKpis(
   const tabsInHeader = headerTabsMode !== "none";
 
   let nextY = 1;
-  if (state.viewMode !== "graph" && payload.config.project.summary) {
+  // The summary costs a row; keep it only where rows are plentiful.
+  if (state.viewMode !== "graph" && payload.config.project.summary && buf.height >= 30) {
     buf.writeText(1, nextY, payload.config.project.summary, width - 2, { fg: TUI_PALETTE.muted });
     nextY += 1;
   }
+  renderDistributionLine(buf, nextY, width, state, filtered);
+  return { nextY: nextY + 1, tabsInHeader };
+}
 
-  const statFeatures = filtered.hasActiveFilters ? filtered.filteredFeatures : payload.features;
-  const shipped = statFeatures.filter((f) => f.status === "shipped").length;
-  const inProgress = statFeatures.filter((f) => f.status === "in-progress").length;
-  const planned = statFeatures.filter((f) => f.status === "planned").length;
-  const pausedOrCut = statFeatures.filter((f) => f.status === "paused" || f.status === "cut").length;
+export const DISTRIBUTION_STATUSES = ["planned", "in-progress", "shipped", "paused", "cut"] as const;
 
-  const kpis = [
-    {
-      id: "kpi-milestones",
-      filterValue: "",
-      label: "MILESTONES",
-      value:
-        filtered.hasActiveFilters && filtered.visibleMilestones.length !== payload.milestones.length
-          ? `${filtered.visibleMilestones.length}/${payload.milestones.length}`
-          : String(filtered.visibleMilestones.length),
-      fg: TUI_PALETTE.text,
-    },
-    {
-      id: "kpi-features",
-      filterValue: "",
-      label: "FEATURES",
-      value:
-        filtered.hasActiveFilters && statFeatures.length !== payload.features.length
-          ? `${statFeatures.length}/${payload.features.length}`
-          : String(statFeatures.length),
-      fg: TUI_PALETTE.text,
-    },
-    { id: "kpi-shipped", filterValue: "shipped", label: "SHIPPED", value: String(shipped), fg: TUI_PALETTE.green },
-    { id: "kpi-active", filterValue: "in-progress", label: statusLabel("in-progress").toUpperCase(), value: String(inProgress), fg: TUI_PALETTE.accent },
-    { id: "kpi-planned", filterValue: "planned", label: "PLANNED", value: String(planned), fg: TUI_PALETTE.slate },
-    { id: "kpi-paused", filterValue: "paused|cut", label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
-  ];
-
-  if (state.viewMode === "graph" || width < 90) {
-    buf.fillRect(0, nextY, width, 1, { bg: TUI_PALETTE.bg });
-    let kx = 1;
-    for (const k of kpis) {
-      const seg = `${k.label}: ${k.value}`;
-      if (kx + seg.length + 2 >= width) break;
-      const activeKpi = Boolean(k.filterValue && state.statusFilter === k.filterValue);
-      buf.writeText(kx, nextY, `${k.label}: `, seg.length, {
-        fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.muted,
-        bold: activeKpi,
-      });
-      buf.writeText(kx + k.label.length + 2, nextY, k.value, k.value.length, { fg: k.fg, bold: true });
-      buf.addHitRegion({
-        id: k.id,
-        kind: "kpi-filter",
-        x: kx,
-        y: nextY,
-        w: seg.length,
-        h: 1,
-        zIndex: 10,
-        data: k.filterValue,
-      });
-      kx += seg.length + 2;
+/**
+ * One line of per-status counts (scoped by every filter except status). Each count is a click
+ * target that filters by its status; zero-count statuses take no segment at any width.
+ */
+export function renderDistributionLine(
+  buf: ScreenBuffer,
+  y: number,
+  width: number,
+  state: TuiState,
+  _filtered: FilteredData
+): void {
+  buf.fillRect(0, y, width, 1, { bg: TUI_PALETTE.bg });
+  const scoped = featuresMatching(state, { ignoreStatus: true });
+  const counts = DISTRIBUTION_STATUSES.map((s) => [s, scoped.filter((f) => f.status === s).length] as const).filter(
+    ([, n]) => n > 0
+  );
+  const total = counts.reduce((sum, [, n]) => sum + n, 0);
+  let x = 1;
+  if (total === 0) {
+    buf.writeText(x, y, "0 features", width - 2, { fg: TUI_PALETTE.muted });
+    return;
+  }
+  // A proportional bar when there is room for it beside the counts.
+  const labels = counts.map(([s, n]) => `${n} ${statusLabel(s)}`);
+  const labelsW = labels.reduce((sum, l) => sum + textCellWidth(l) + 3, 0);
+  const barW = Math.min(20, width - 2 - labelsW - 2);
+  if (barW >= 8) {
+    let used = 0;
+    counts.forEach(([s, n], i) => {
+      const segW = i === counts.length - 1 ? barW - used : Math.max(1, Math.round((n / total) * barW));
+      const st = getStatusStyle(s);
+      for (let k = 0; k < segW && used + k < barW; k++) buf.put(x + used + k, y, "█", { fg: st.fg });
+      buf.addHitRegion({ id: `dist-bar-${s}`, kind: "dist-filter", x: x + used, y, w: Math.max(1, segW), h: 1, zIndex: 10, data: s });
+      used += segW;
+    });
+    x += barW + 2;
+  }
+  counts.forEach(([s, n], i) => {
+    const label = labels[i]!;
+    const w = textCellWidth(label);
+    if (x + w > width - 1) return;
+    const active = state.statusFilter === s;
+    const st = getStatusStyle(s);
+    buf.writeText(x, y, label, w, active ? { fg: st.fg, bg: st.bg, bold: true } : { fg: st.fg, bold: true });
+    buf.addHitRegion({ id: `dist-${s}`, kind: "dist-filter", x, y, w, h: 1, zIndex: 10, data: s });
+    x += w;
+    if (i < counts.length - 1 && x + 3 < width) {
+      buf.writeText(x, y, " · ", 3, { fg: TUI_PALETTE.border });
+      x += 3;
     }
-    return { nextY: nextY + 1, tabsInHeader };
-  }
+  });
+}
 
-  const gap = 1;
-  const usableW = Math.max(60, width - 2);
-  const boxW = Math.floor((usableW - gap * (kpis.length - 1)) / kpis.length);
-  for (let i = 0; i < kpis.length; i++) {
-    const k = kpis[i]!;
-    const bx = 1 + i * (boxW + gap);
-    const bw = i === kpis.length - 1 ? width - 1 - bx : boxW;
-    const activeKpi = Boolean(k.filterValue && state.statusFilter === k.filterValue);
-    buf.drawBox(bx, nextY, bw, 3, {
-      borderStyle: { fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.border },
-      fillStyle: { bg: activeKpi ? TUI_PALETTE.accentSoft : TUI_PALETTE.surface },
-    });
-    buf.writeText(bx + 2, nextY + 1, k.label, Math.max(1, bw - 3 - k.value.length), {
-      fg: activeKpi ? TUI_PALETTE.accent : TUI_PALETTE.muted,
-      bold: activeKpi,
-    });
-    buf.writeText(bx + bw - 2 - k.value.length, nextY + 1, k.value, k.value.length, {
-      fg: k.fg,
-      bold: true,
-    });
-    buf.addHitRegion({
-      id: k.id,
-      kind: "kpi-filter",
-      x: bx,
-      y: nextY,
-      w: bw,
-      h: 3,
-      zIndex: 10,
-      data: k.filterValue,
-    });
-  }
-  return { nextY: nextY + 3, tabsInHeader };
+/** Features passing the active filters; `ignoreStatus` leaves the status filter out. */
+export function featuresMatching(state: TuiState, opts: { ignoreStatus?: boolean } = {}): Feature[] {
+  const q = state.search.trim().toLowerCase();
+  const statusValues = !opts.ignoreStatus && state.statusFilter ? new Set(state.statusFilter.split("|")) : null;
+  return state.payload.features.filter((f) => {
+    if (state.milestoneFilter && f.milestone !== state.milestoneFilter) return false;
+    if (statusValues && !statusValues.has(f.status)) return false;
+    if (state.areaFilter && f.area !== state.areaFilter) return false;
+    if (q && !(f.title.toLowerCase().includes(q) || f.id.toLowerCase().includes(q) || (f.description || "").toLowerCase().includes(q))) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/** "status: paused, search: \"x\"" — names the active filters for empty states. */
+export function describeFilters(state: TuiState): string {
+  const parts: string[] = [];
+  if (state.milestoneFilter) parts.push(`milestone: ${state.milestoneFilter}`);
+  if (state.statusFilter) parts.push(`status: ${state.statusFilter.split("|").map(statusLabel).join(" / ")}`);
+  if (state.areaFilter) parts.push(`area: ${state.areaFilter}`);
+  if (state.search.trim()) parts.push(`search: "${state.search.trim()}"`);
+  return parts.join(", ");
 }
 
 export function renderTabsAndFilters(
@@ -740,412 +759,204 @@ export function renderTabsAndFilters(
   return filterY + 1;
 }
 
-export function renderCardsView(
+/** Feature ids in ledger order: milestone groups in milestone order, rows in feature order. */
+export function ledgerOrder(state: TuiState, filtered: FilteredData = computeFilteredData(state)): string[] {
+  const ids: string[] = [];
+  for (const m of filtered.visibleMilestones) {
+    for (const f of filtered.filteredFeatures) if (f.milestone === m.id) ids.push(f.id);
+  }
+  return ids;
+}
+
+interface LedgerColumns {
+  title: { x: number; w: number };
+  id?: { x: number; w: number };
+  crit: { x: number; w: number };
+  area?: { x: number; w: number };
+  dep: { x: number; w: number };
+  latest?: { x: number; w: number };
+}
+
+/** Column budget for a ledger row: 80 cols shows mark, title, n/m and the first dependency. */
+function ledgerColumns(x0: number, width: number, longestId = 18): LedgerColumns {
+  const right = x0 + width - 1;
+  // `width` is the inner width (terminal columns minus the frame): 120 columns → 118.
+  if (width >= 110) {
+    // The id column fits the longest id (up to 26 cells) so ids are never truncated.
+    const idW = Math.max(10, Math.min(26, longestId));
+    const areaW = width >= 168 ? 16 : 12;
+    const depW = 18;
+    const critW = 5;
+    const fixed = 2 + idW + critW + areaW + depW + 6;
+    const flex = Math.max(20, width - fixed - 1);
+    const titleW = Math.max(20, Math.floor(flex * 0.55));
+    const latestW = Math.max(0, flex - titleW);
+    let x = x0 + 3;
+    const title = { x, w: titleW };
+    x += titleW + 1;
+    const id = { x, w: idW };
+    x += idW + 1;
+    const crit = { x, w: critW };
+    x += critW + 1;
+    const area = { x, w: areaW };
+    x += areaW + 1;
+    const dep = { x, w: depW };
+    x += depW + 1;
+    const latest = { x, w: Math.max(0, Math.min(latestW, right - x)) };
+    return { title, id, crit, area, dep, latest };
+  }
+  const depW = Math.min(20, Math.max(10, Math.floor(width * 0.24)));
+  const critW = 5;
+  const dep = { x: right - depW + 1, w: depW };
+  const crit = { x: dep.x - 1 - critW, w: critW };
+  const title = { x: x0 + 3, w: Math.max(8, crit.x - 1 - (x0 + 3)) };
+  return { title, crit, dep };
+}
+
+/**
+ * Roadmap ledger: one row per feature under its milestone group. Rows hold the status mark,
+ * title, criteria n/m and the first dependency; wider terminals add the id, area and the latest
+ * update. Group headers lay out label and progress inside a measured width budget.
+ */
+export function renderLedgerView(
   buf: ScreenBuffer,
   rect: Rect,
   state: TuiState,
   filtered: FilteredData
 ): { maxScrollY: number; orderedFeatureIds: string[]; featureBounds: Map<string, { y: number; h: number }> } {
   const { payload } = state;
-  const q = state.search.trim().toLowerCase();
   const orderedFeatureIds: string[] = [];
-  // Virtual (pre-scroll) row geometry per feature so keyboard selection can reveal itself.
   const featureBounds = new Map<string, { y: number; h: number }>();
+  const x0 = rect.x + 1;
+  const width = Math.max(20, rect.w - 2);
 
-  if (filtered.visibleMilestones.length === 0) {
-    const msg =
-      state.statusFilter || state.areaFilter || q
-        ? "No features match the active filter."
-        : "No milestones match the active filter.";
-    buf.writeText(rect.x + 1, rect.y + 1, msg, rect.w - 2, { fg: TUI_PALETTE.muted });
+  if (payload.features.length === 0 && !filtered.hasActiveFilters) {
+    buf.writeText(x0, rect.y + 1, "No features yet.", width, { fg: TUI_PALETTE.text, bold: true });
+    buf.writeText(x0, rect.y + 2, "Add one with pp feature add <id> --title \"…\" --milestone <milestone>.", width, {
+      fg: TUI_PALETTE.muted,
+    });
+    return { maxScrollY: 0, orderedFeatureIds, featureBounds };
+  }
+  if (filtered.filteredFeatures.length === 0 && (filtered.hasFeatureFilter || filtered.visibleMilestones.length === 0)) {
+    renderFilteredEmpty(buf, rect, state, "features");
     return { maxScrollY: 0, orderedFeatureIds, featureBounds };
   }
 
-  const cols = rect.w >= 108 ? 3 : rect.w >= 68 ? 2 : 1;
-  const innerPad = 2;
-  const gapX = 2;
-  const gapY = 1;
-  const cardH = 6;
-  const sectionPadX = rect.x + 1;
-  const sectionW = Math.max(24, rect.w - 2);
-  const gridW = Math.max(20, sectionW - innerPad * 2);
-  const colW = Math.floor((gridW - gapX * (cols - 1)) / cols);
-
-  let vy = 0;
+  const cols = ledgerColumns(x0, width, Math.max(0, ...payload.features.map((f) => textCellWidth(f.id))));
   type DrawOp = (w: ClipWriter) => void;
   const ops: DrawOp[] = [];
+  let vy = 0;
 
-  for (const m of filtered.visibleMilestones) {
-    const allMFeatures = payload.features.filter((f) => f.milestone === m.id);
-    const mFeatures = allMFeatures.filter((f) => {
-      if (filtered.statusFilterValues && !filtered.statusFilterValues.has(f.status)) return false;
-      if (state.areaFilter && f.area !== state.areaFilter) return false;
-      if (
-        q &&
-        !(
-          f.title.toLowerCase().includes(q) ||
-          f.id.toLowerCase().includes(q) ||
-          (f.description || "").toLowerCase().includes(q)
-        )
-      ) {
-        return false;
-      }
-      return true;
-    });
-
-    const mShipped = allMFeatures.filter((f) => f.status === "shipped").length;
-    const pct = allMFeatures.length ? Math.round((mShipped / allMFeatures.length) * 100) : 0;
-    const rowsNeeded = Math.max(1, Math.ceil(mFeatures.length / cols));
-    const gridH =
-      mFeatures.length === 0 ? 1 : rowsNeeded * cardH + Math.max(0, rowsNeeded - 1) * gapY;
-    const hasDesc = Boolean(m.description);
-    const headerLines = hasDesc ? 4 : 3;
-    const boxH = headerLines + gridH + 1;
-    const secStartY = vy;
-    const mSt = getStatusStyle(m.status);
-
+  filtered.visibleMilestones.forEach((m, gi) => {
+    const all = payload.features.filter((f) => f.milestone === m.id);
+    const rows = filtered.filteredFeatures.filter((f) => f.milestone === m.id);
+    const shipped = all.filter((f) => f.status === "shipped").length;
+    const gy = vy;
     ops.push((cw) => {
-      cw.drawBox(sectionPadX, secStartY, sectionW, boxH, {
-        borderStyle: { fg: TUI_PALETTE.border },
-        fillStyle: { bg: TUI_PALETTE.surface },
-      });
-
-      const progressStr = `${mShipped}/${allMFeatures.length} shipped (${pct}%)`;
-      const targetStr = m.target ? ` [${m.target}]` : "";
-      const headLeftMax = Math.max(12, sectionW - progressStr.length - targetStr.length - 16);
-      let hx = sectionPadX + innerPad;
-      const titleLen = Math.min(headLeftMax, Array.from(m.title).length);
-      cw.writeText(hx, secStartY + 1, m.title, titleLen, { fg: TUI_PALETTE.text, bold: true });
-      hx += titleLen + 1;
-      const idChip = ` ${m.id} `;
-      cw.fillRect(hx, secStartY + 1, idChip.length, 1, { bg: TUI_PALETTE.surface2 });
-      cw.writeText(hx, secStartY + 1, idChip, idChip.length, { fg: TUI_PALETTE.muted });
-      hx += idChip.length + 1;
-      const stBadge = ` ${statusLabel(m.status)} `;
-      cw.fillRect(hx, secStartY + 1, stBadge.length, 1, { bg: mSt.bg });
-      cw.writeText(hx, secStartY + 1, stBadge, stBadge.length, { fg: mSt.fg, bold: true });
-      if (targetStr) {
-        cw.writeText(hx + stBadge.length + 1, secStartY + 1, targetStr.trim(), targetStr.length, {
-          fg: TUI_PALETTE.muted,
-        });
+      cw.fillRect(x0 - 1, gy, width + 2, 1, { bg: TUI_PALETTE.surface });
+      // Right side first (progress), then the label shrinks to what is left.
+      const progress = `${shipped}/${all.length} shipped`;
+      const barW = width >= 60 ? 8 : 0;
+      const rightW = textCellWidth(progress) + (barW ? barW + 1 : 0);
+      const rightX = x0 + width - rightW;
+      cw.writeText(rightX, gy, progress, textCellWidth(progress), { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface });
+      if (barW) cw.drawProgress(rightX + textCellWidth(progress) + 1, gy, barW, shipped, all.length, TUI_PALETTE.green);
+      const mSt = getStatusStyle(m.status);
+      const statusTxt = `${mSt.icon} ${statusLabel(m.status)}`;
+      const budget = rightX - 2 - x0;
+      const parts: Array<{ text: string; style: CellStyle; optional: number }> = [
+        { text: m.id, style: { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface }, optional: 2 },
+        { text: statusTxt, style: { fg: mSt.fg, bg: TUI_PALETTE.surface, bold: true }, optional: 3 },
+        { text: m.target ?? "", style: { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface }, optional: 1 },
+      ].filter((p) => p.text);
+      // Drop optional parts (target first, then id, then status) until the title keeps 12 cells.
+      const minTitle = Math.min(12, textCellWidth(m.title));
+      let kept = parts.slice();
+      const extraW = () => kept.reduce((sum, p) => sum + textCellWidth(p.text) + 2, 0);
+      while (kept.length > 0 && budget - extraW() < minTitle) {
+        const drop = kept.reduce((lo, p) => (p.optional < lo.optional ? p : lo), kept[0]!);
+        kept = kept.filter((p) => p !== drop);
       }
-      cw.writeText(
-        sectionPadX + sectionW - innerPad - progressStr.length,
-        secStartY + 1,
-        progressStr,
-        progressStr.length,
-        { fg: TUI_PALETTE.muted }
-      );
-
-      let lineY = secStartY + 2;
-      if (hasDesc) {
-        cw.writeText(sectionPadX + innerPad, lineY, m.description, sectionW - innerPad * 2, {
-          fg: TUI_PALETTE.muted,
-        });
-        lineY += 1;
-      }
-      cw.drawProgress(
-        sectionPadX + innerPad,
-        lineY,
-        Math.max(10, sectionW - innerPad * 2),
-        mShipped,
-        allMFeatures.length,
-        TUI_PALETTE.green
-      );
-      lineY += 1;
-
-      if (mFeatures.length === 0) {
-        cw.writeText(
-          sectionPadX + innerPad,
-          lineY,
-          "No features match in this milestone.",
-          sectionW - innerPad * 2,
-          { fg: TUI_PALETTE.muted }
-        );
+      const titleW = Math.max(1, Math.min(textCellWidth(m.title), budget - extraW()));
+      let hx = x0;
+      cw.writeText(hx, gy, m.title, titleW, { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface, bold: true });
+      hx += titleW + 2;
+      for (const p of kept) {
+        const w = textCellWidth(p.text);
+        cw.writeText(hx, gy, p.text, w, p.style);
+        hx += w + 2;
       }
     });
+    vy += 1;
 
-    if (mFeatures.length > 0) {
-      const cardsStartY = secStartY + headerLines;
-      mFeatures.forEach((f, idx) => {
-        orderedFeatureIds.push(f.id);
-        const col = idx % cols;
-        const row = Math.floor(idx / cols);
-        const cx = sectionPadX + innerPad + col * (colW + gapX);
-        const cy = cardsStartY + row * (cardH + gapY);
-        featureBounds.set(f.id, { y: cy, h: cardH });
-        const cwActual = col === cols - 1 ? sectionPadX + sectionW - innerPad - cx : colW;
-
-        ops.push((cw) => {
-          const isSel = state.selectedFeatureId === f.id;
-          const fSt = getStatusStyle(f.status);
-          const done = f.ship_criteria.filter((c) => c.done).length;
-          const total = f.ship_criteria.length;
-          const latest = f.updates.length ? f.updates[f.updates.length - 1] : null;
-          const beads = (payload.beads && payload.beads[f.id]) || [];
-
-          cw.drawBox(cx, cy, cwActual, cardH, {
-            borderStyle: { fg: isSel ? TUI_PALETTE.accent : TUI_PALETTE.border },
-            fillStyle: { bg: TUI_PALETTE.surface2 },
-          });
-          cw.addHitRegion(cx, cy, cwActual, cardH, `card-${f.id}`, "feature-card", f.id);
-
-          const stLabel = ` ${fSt.icon} ${statusLabel(f.status)} `;
-          const innerW = Math.max(8, cwActual - 4);
-          cw.writeText(cx + 2, cy + 1, f.title, Math.max(4, innerW - stLabel.length - 1), {
-            fg: TUI_PALETTE.text,
-            bold: true,
-          });
-          const pillX = cx + cwActual - 2 - stLabel.length;
-          if (pillX > cx + 2) {
-            cw.fillRect(pillX, cy + 1, stLabel.length, 1, { bg: fSt.bg });
-            cw.writeText(pillX, cy + 1, stLabel, stLabel.length, { fg: fSt.fg, bold: true });
-          }
-
-          const areaText = f.area ?? "";
-          // The right-aligned area label stays inside its own card: measured in
-          // terminal cells, capped to the space left of the feature ID, and
-          // ellipsis-truncated so it can never paint into adjacent cards. The
-          // whole card remains the click target either way.
-          const cardLeft = cx + 2;
-          const cardRight = cx + Math.max(2, cwActual - 2);
-          const areaW = textCellWidth(areaText);
-          const areaAvail = Math.max(0, Math.min(areaW, cardRight - cardLeft - 5));
-          const areaX = cardRight - areaAvail;
-          const idMax = Math.max(1, (areaAvail > 0 ? areaX - 1 : cardRight) - cardLeft);
-          cw.writeText(cardLeft, cy + 2, f.id, idMax, {
-            fg: TUI_PALETTE.muted,
-          });
-          if (areaAvail > 0) {
-            cw.writeText(areaX, cy + 2, truncateText(areaText, areaAvail), areaAvail, {
-              fg: TUI_PALETTE.slate,
-            });
-          }
-
-          const critStr = formatCriteria(done, total);
-          cw.writeText(cx + 2, cy + 3, critStr, Math.min(16, innerW), { fg: TUI_PALETTE.muted });
-          if (total > 0 && innerW > 20) {
-            cw.drawProgress(
-              cx + 2 + critStr.length + 1,
-              cy + 3,
-              Math.min(12, innerW - critStr.length - 1),
-              done,
-              total,
-              done === total ? TUI_PALETTE.green : TUI_PALETTE.accent
-            );
-          }
-
-          let footerLine = "";
-          let footerFg: PaletteColor = TUI_PALETTE.muted;
-          if (state.showDeps && f.depends_on.length > 0) {
-            footerLine = `deps: ${f.depends_on.join(", ")}`;
-          } else if (beads.length > 0) {
-            const firstB = beads[0]!;
-            const bState = firstB.available ? (firstB.found ? `[${statusLabel(firstB.status ?? "")}]` : "[missing]") : "";
-            footerLine = `${firstB.ref} ${bState}`.trim();
-            footerFg = firstB.found
-              ? firstB.status === "closed"
-                ? TUI_PALETTE.green
-                : TUI_PALETTE.accent
-              : TUI_PALETTE.red;
-          } else if (latest) {
-            footerLine = `> ${latest.note}`;
-          } else if (f.description) {
-            footerLine = f.description;
-          }
-          if (footerLine) {
-            cw.writeText(cx + 2, cy + 4, footerLine, innerW, { fg: footerFg });
-          }
-        });
-      });
+    if (rows.length === 0) {
+      const ey = vy;
+      const msg = all.length === 0 ? "No features yet." : `No features match ${describeFilters(state)}.`;
+      ops.push((cw) => cw.writeText(x0 + 2, ey, msg, width - 2, { fg: TUI_PALETTE.muted }));
+      vy += 1;
     }
 
-    vy += boxH + 1;
-  }
+    for (const f of rows) {
+      orderedFeatureIds.push(f.id);
+      const ry = vy;
+      featureBounds.set(f.id, { y: ry, h: 1 });
+      ops.push((cw) => {
+        const sel = state.selectedFeatureId === f.id;
+        const bg = sel ? TUI_PALETTE.accentSoft : TUI_PALETTE.bg;
+        cw.fillRect(x0 - 1, ry, width + 2, 1, { bg });
+        const st = getStatusStyle(f.status);
+        cw.writeText(x0, ry, st.icon, 1, { fg: st.fg, bg, bold: true });
+        cw.writeText(cols.title.x, ry, f.title, cols.title.w, { fg: TUI_PALETTE.text, bg, bold: sel });
+        if (cols.id) cw.writeText(cols.id.x, ry, f.id, cols.id.w, { fg: TUI_PALETTE.muted, bg });
+        const done = f.ship_criteria.filter((c) => c.done).length;
+        const total = f.ship_criteria.length;
+        const crit = total ? `${done}/${total}` : "—";
+        cw.writeText(cols.crit.x + Math.max(0, cols.crit.w - textCellWidth(crit)), ry, crit, cols.crit.w, {
+          fg: total && done === total ? TUI_PALETTE.green : TUI_PALETTE.muted,
+          bg,
+        });
+        if (cols.area) cw.writeText(cols.area.x, ry, f.area ?? "—", cols.area.w, { fg: TUI_PALETTE.slate, bg });
+        const firstDep = state.showDeps && f.depends_on.length ? `→ ${f.depends_on[0]}${f.depends_on.length > 1 ? ` +${f.depends_on.length - 1}` : ""}` : "";
+        if (firstDep) cw.writeText(cols.dep.x, ry, firstDep, cols.dep.w, { fg: TUI_PALETTE.muted, bg });
+        if (cols.latest && cols.latest.w > 4) {
+          const latest = f.updates.length ? f.updates[f.updates.length - 1]!.note : "";
+          if (latest) cw.writeText(cols.latest.x, ry, latest, cols.latest.w, { fg: TUI_PALETTE.muted, bg });
+        }
+        cw.addHitRegion(x0 - 1, ry, width + 2, 1, `row-${f.id}`, "feature-card", f.id);
+      });
+      vy += 1;
+    }
+    if (gi < filtered.visibleMilestones.length - 1) vy += 1;
+  });
 
-  const maxScrollY = Math.max(0, vy - 1 - rect.h);
-  const clampedScroll = Math.max(0, Math.min(state.cardsScrollY, maxScrollY));
-  state.cardsScrollY = clampedScroll;
-
-  const writer = new ClipWriter(buf, rect, clampedScroll, 8);
+  const maxScrollY = Math.max(0, vy - rect.h);
+  state.roadmapScrollY = Math.max(0, Math.min(state.roadmapScrollY, maxScrollY));
+  const writer = new ClipWriter(buf, rect, state.roadmapScrollY, 8);
   for (const op of ops) op(writer);
-
+  if (maxScrollY > 0 && state.roadmapScrollY < maxScrollY) {
+    const more = `▼ ${vy - rect.h - state.roadmapScrollY} more`;
+    buf.writeText(rect.x + rect.w - 1 - textCellWidth(more), rect.y + rect.h - 1, more, textCellWidth(more), {
+      fg: TUI_PALETTE.muted,
+      bg: TUI_PALETTE.bg,
+    });
+  }
   return { maxScrollY, orderedFeatureIds, featureBounds };
 }
 
-export function renderBoardView(
-  buf: ScreenBuffer,
-  rect: Rect,
-  state: TuiState,
-  filtered: FilteredData
-): {
-  columns: FeatureStatus[];
-  orderedFeatureIds: string[];
-  featureBounds: Map<string, { y: number; h: number }>;
-  columnViewports: Map<FeatureStatus, { y: number; h: number; maxScroll: number }>;
-} {
-  const columns: FeatureStatus[] = ["planned", "in-progress", "shipped"];
-  const statusValues = filtered.statusFilterValues;
-  if ((statusValues?.has("paused") ?? false) || state.payload.features.some((f) => f.status === "paused")) {
-    columns.push("paused");
-  }
-  if ((statusValues?.has("cut") ?? false) || state.payload.features.some((f) => f.status === "cut")) {
-    columns.push("cut");
-  }
-
-  const labels: Record<FeatureStatus, string> = {
-    planned: statusLabel("planned"),
-    "in-progress": statusLabel("in-progress"),
-    shipped: statusLabel("shipped"),
-    paused: statusLabel("paused"),
-    cut: statusLabel("cut"),
-  };
-
-  const orderedFeatureIds: string[] = [];
-  // Per-column viewport (screen rect + scroll cap) and per-card virtual geometry so
-  // keyboard selection can reveal itself in its own column.
-  const featureBounds = new Map<string, { y: number; h: number }>();
-  const columnViewports = new Map<FeatureStatus, { y: number; h: number; maxScroll: number }>();
-
-  if (rect.w < 90) {
-    state.boardActiveCol = Math.max(0, Math.min(state.boardActiveCol, columns.length - 1));
-    let tx = rect.x + 1;
-    columns.forEach((col, idx) => {
-      const count = filtered.filteredFeatures.filter((f) => f.status === col).length;
-      const active = idx === state.boardActiveCol;
-      const st = getStatusStyle(col);
-      const used = drawPill(
-        buf,
-        tx,
-        rect.y,
-        `${labels[col]} (${count})`,
-        active ? { fg: st.fg, bg: st.bg, bold: true } : { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface2 },
-        { id: `board-tab-${col}`, kind: "board-tab", data: idx }
-      );
-      tx += used + 1;
-    });
-
-    const activeStatus = columns[state.boardActiveCol] ?? "planned";
-    const colFeatures = filtered.filteredFeatures.filter((f) => f.status === activeStatus);
-    colFeatures.forEach((f) => orderedFeatureIds.push(f.id));
-    renderBoardColumn(
-      buf,
-      { x: rect.x + 1, y: rect.y + 1, w: rect.w - 2, h: Math.max(4, rect.h - 1) },
-      activeStatus,
-      labels[activeStatus],
-      colFeatures,
-      state,
-      featureBounds,
-      columnViewports
-    );
-    return { columns, orderedFeatureIds, featureBounds, columnViewports };
-  }
-
-  const gap = 1;
-  const colW = Math.floor((rect.w - 2 - gap * (columns.length - 1)) / columns.length);
-  columns.forEach((colStatus, idx) => {
-    const cx = rect.x + 1 + idx * (colW + gap);
-    const w = idx === columns.length - 1 ? rect.x + rect.w - 1 - cx : colW;
-    const colFeatures = filtered.filteredFeatures.filter((f) => f.status === colStatus);
-    colFeatures.forEach((f) => orderedFeatureIds.push(f.id));
-    renderBoardColumn(
-      buf,
-      { x: cx, y: rect.y, w, h: rect.h },
-      colStatus,
-      labels[colStatus],
-      colFeatures,
-      state,
-      featureBounds,
-      columnViewports
-    );
-  });
-
-  return { columns, orderedFeatureIds, featureBounds, columnViewports };
-}
-
-function renderBoardColumn(
-  buf: ScreenBuffer,
-  colRect: Rect,
-  colStatus: FeatureStatus,
-  label: string,
-  features: Feature[],
-  state: TuiState,
-  featureBounds: Map<string, { y: number; h: number }>,
-  columnViewports: Map<FeatureStatus, { y: number; h: number; maxScroll: number }>
-): void {
-  const st = getStatusStyle(colStatus);
-  buf.drawBox(colRect.x, colRect.y, colRect.w, colRect.h, {
-    borderStyle: { fg: TUI_PALETTE.border },
-    fillStyle: { bg: TUI_PALETTE.surface },
-  });
-  buf.addHitRegion({
-    id: `board-col-${colStatus}`,
-    kind: "board-col",
-    x: colRect.x,
-    y: colRect.y,
-    w: colRect.w,
-    h: colRect.h,
-    zIndex: 4,
-    data: colStatus,
-  });
-
-  const badge = ` ${label} `;
-  buf.fillRect(colRect.x + 2, colRect.y + 1, badge.length, 1, { bg: st.bg });
-  buf.writeText(colRect.x + 2, colRect.y + 1, badge, badge.length, { fg: st.fg, bold: true });
-  const countStr = String(features.length);
-  buf.writeText(colRect.x + colRect.w - 2 - countStr.length, colRect.y + 1, countStr, countStr.length, {
-    fg: TUI_PALETTE.muted,
-  });
-  for (let i = colRect.x + 1; i < colRect.x + colRect.w - 1; i++) {
-    buf.put(i, colRect.y + 2, "─", { fg: TUI_PALETTE.border });
-  }
-
-  const listRect: Rect = {
-    x: colRect.x + 1,
-    y: colRect.y + 3,
-    w: Math.max(8, colRect.w - 2),
-    h: Math.max(1, colRect.h - 4),
-  };
-  columnViewports.set(colStatus, { y: listRect.y, h: listRect.h, maxScroll: 0 });
-
-  if (features.length === 0) {
-    buf.writeText(listRect.x + 1, listRect.y, "No features", listRect.w - 2, {
-      fg: TUI_PALETTE.muted,
-    });
-    return;
-  }
-
-  const cardH = 5;
-  const totalH = features.length * (cardH + 1) - 1;
-  const maxScroll = Math.max(0, totalH - listRect.h);
-  columnViewports.set(colStatus, { y: listRect.y, h: listRect.h, maxScroll });
-  const scrollY = Math.max(0, Math.min(state.boardScrollY[colStatus] ?? 0, maxScroll));
-  state.boardScrollY[colStatus] = scrollY;
-
-  const cw = new ClipWriter(buf, listRect, scrollY, 8);
-  features.forEach((f, idx) => {
-    const cy = idx * (cardH + 1);
-    featureBounds.set(f.id, { y: cy, h: cardH });
-    const cardW = Math.max(8, listRect.w - 2);
-    const cardX = listRect.x + 1;
-    const isSel = state.selectedFeatureId === f.id;
-    cw.drawBox(cardX, cy, cardW, cardH, {
-      borderStyle: { fg: isSel ? TUI_PALETTE.accent : TUI_PALETTE.border },
-      fillStyle: { bg: TUI_PALETTE.surface2 },
-    });
-    cw.addHitRegion(cardX, cy, cardW, cardH, `board-card-${f.id}`, "feature-card", f.id);
-    cw.writeText(cardX + 2, cy + 1, f.title, Math.max(4, cardW - 4), {
-      fg: TUI_PALETTE.text,
-      bold: true,
-    });
-    cw.writeText(cardX + 2, cy + 2, f.id, Math.max(4, cardW - 4), { fg: TUI_PALETTE.muted });
-    const done = f.ship_criteria.filter((c) => c.done).length;
-    const total = f.ship_criteria.length;
-    const meta = [f.milestone, f.area, total > 0 ? formatCriteria(done, total) : ""]
-      .filter(Boolean)
-      .join(" · ");
-    cw.writeText(cardX + 2, cy + 3, meta, Math.max(4, cardW - 4), { fg: TUI_PALETTE.slate });
-  });
+/** Empty state for a filtered-out view: names the filter and offers a keyboard-accessible reset. */
+export function renderFilteredEmpty(buf: ScreenBuffer, rect: Rect, state: TuiState, what: "features" | "changes"): void {
+  const x0 = rect.x + 1;
+  const w = Math.max(10, rect.w - 2);
+  buf.writeText(x0, rect.y + 1, `No ${what} match ${describeFilters(state)}.`, w, { fg: TUI_PALETTE.text, bold: true });
+  const used = drawPill(
+    buf,
+    x0,
+    rect.y + 3,
+    "c Clear filters",
+    { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true },
+    { id: "empty-reset", kind: "reset-filters" }
+  );
+  buf.writeText(x0 + used + 1, rect.y + 3, "press c or click to show everything", w - used - 1, { fg: TUI_PALETTE.muted });
 }
 
 export function renderFloatingPicker(
@@ -1229,150 +1040,176 @@ export function renderHealthOverlay(
 ): void {
   if (!state.healthPanelOpen) return;
 
-  buf.addHitRegion({
-    id: "health-backdrop",
-    kind: "health-backdrop",
-    x: 0,
-    y: 0,
-    w: width,
-    h: height,
-    zIndex: HitLayer.healthBackdrop,
-  });
+  buf.addHitRegion({ id: "health-backdrop", kind: "health-backdrop", x: 0, y: 0, w: width, h: height, zIndex: HitLayer.healthBackdrop });
 
-  const w = Math.min(width - 4, 92);
-  const h = Math.min(height - 4, 22);
-  const x = Math.max(1, Math.floor((width - w) / 2));
-  const y = Math.max(1, Math.floor((height - h) / 2));
-
-  buf.drawBox(x, y, w, h, {
-    borderStyle: { fg: TUI_PALETTE.accent },
-    fillStyle: { bg: TUI_PALETTE.surface },
-    title: "Health & Drift Diagnostics",
-    titleStyle: { fg: TUI_PALETTE.text, bold: true },
-  });
-
-  drawPill(
-    buf,
-    x + w - 10,
-    y + 1,
-    "Close",
-    { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "health-close", kind: "health-close", zIndex: HitLayer.healthControl }
-  );
-
+  const w = Math.max(20, Math.min(width - 4, 92));
+  const innerW = w - 4;
   const featureIds = new Set(state.payload.features.map((f) => f.id));
   const issues: Array<{ level: "error" | "warning"; item: ValidationIssue }> = [
     ...state.payload.check.errors.map((item) => ({ level: "error" as const, item })),
     ...state.payload.check.warnings.map((item) => ({ level: "warning" as const, item })),
   ];
 
-  const firstRowY = y + 3;
+  // Content rows: each paints itself at a screen row. Messages wrap (remedies included).
+  type Row = (y: number, x: number) => void;
+  const rows: Row[] = [];
+  const text = (t: string, style: CellStyle) => {
+    for (const line of wrapCells(t, innerW)) rows.push((y, x) => buf.writeText(x, y, line, innerW, style));
+  };
   if (state.loadError) {
-    buf.writeText(x + 3, firstRowY, `Last reload failed: ${state.loadError}`, w - 6, {
-      fg: TUI_PALETTE.red,
-    });
+    text(`Last reload failed: ${state.loadError}`, { fg: TUI_PALETTE.red });
+    rows.push(() => {});
   }
-
   if (issues.length === 0) {
     const beadsWanted = !state.noBeads && state.payload.config.integrations.beads.enabled;
-    const rowY = firstRowY + (state.loadError ? 2 : 0);
     if (!beadsWanted) {
-      buf.writeText(
-        x + 3,
-        rowY,
-        "Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).",
-        w - 6,
-        { fg: TUI_PALETTE.green }
-      );
-      buf.writeText(
-        x + 3,
-        rowY + 1,
-        "Beads checks skipped (--no-beads or integrations.beads.enabled=false).",
-        w - 6,
-        { fg: TUI_PALETTE.amber }
-      );
+      text("Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).", { fg: TUI_PALETTE.green });
+      text("Beads checks skipped (--no-beads or integrations.beads.enabled=false).", { fg: TUI_PALETTE.amber });
     } else if (state.beadsLoading) {
-      buf.writeText(
-        x + 3,
-        rowY,
-        "Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).",
-        w - 6,
-        { fg: TUI_PALETTE.green }
-      );
-      buf.writeText(x + 3, rowY + 1, "Beads checks pending…", w - 6, { fg: TUI_PALETTE.amber });
+      text("Schema, DAG, and ROADMAP.md sync checks passed (0 errors, 0 warnings).", { fg: TUI_PALETTE.green });
+      text("Beads checks pending…", { fg: TUI_PALETTE.amber });
     } else {
-      buf.writeText(
-        x + 3,
-        rowY,
-        "All schema, DAG, ROADMAP.md sync, and Beads checks passed (0 errors, 0 warnings).",
-        w - 6,
-        { fg: TUI_PALETTE.green }
-      );
+      text("All schema, DAG, ROADMAP.md sync, and Beads checks passed (0 errors, 0 warnings).", { fg: TUI_PALETTE.green });
     }
-    return;
+  } else {
+    issues.forEach(({ level, item }, i) => {
+      const st = level === "error" ? { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft } : { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft };
+      const hasJump = Boolean(item.entityId && featureIds.has(item.entityId));
+      rows.push((y, x) => {
+        drawPill(buf, x - 1, y, item.code, { ...st, bold: true });
+        if (hasJump && item.entityId) {
+          const label = `Inspect ${item.entityId}`;
+          const lw = textCellWidth(label) + 2;
+          drawPill(buf, x + innerW - lw, y, label, { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true }, {
+            id: `health-jump-${item.entityId}`,
+            kind: "health-jump",
+            zIndex: HitLayer.healthControl,
+            data: item.entityId,
+          });
+        }
+      });
+      text(item.message, { fg: TUI_PALETTE.text });
+      if (i < issues.length - 1) rows.push(() => {});
+    });
   }
 
-  // Scrollable diagnostic list: the window clamps to the issue count so the final
-  // diagnostic is reachable (and its Inspect pill clickable) on short terminals.
-  const listTop = firstRowY + (state.loadError ? 2 : 0);
-  const maxRows = Math.max(1, y + h - 2 - listTop);
-  const maxScroll = Math.max(0, issues.length - maxRows);
+  // Frame: border + title/close row + blank + content + border; sized to content.
+  const chrome = 4;
+  const h = Math.max(6, Math.min(height - 2, rows.length + chrome));
+  const x = Math.max(1, Math.floor((width - w) / 2));
+  const y = Math.max(1, Math.floor((height - h) / 2));
+  buf.drawBox(x, y, w, h, {
+    borderStyle: { fg: TUI_PALETTE.accent },
+    fillStyle: { bg: TUI_PALETTE.surface },
+    title: "Health",
+    titleStyle: { fg: TUI_PALETTE.text, bold: true },
+  });
+  drawPill(buf, x + w - 9, y + 1, "Close", { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 }, {
+    id: "health-close",
+    kind: "health-close",
+    zIndex: HitLayer.healthControl,
+  });
+  const top = y + 2;
+  const visible = Math.max(1, h - chrome);
+  const maxScroll = Math.max(0, rows.length - visible);
   state.healthScrollY = Math.max(0, Math.min(state.healthScrollY, maxScroll));
-
-  let rowY = listTop;
-  for (let i = state.healthScrollY; i < issues.length && rowY < y + h - 2; i++) {
-    const { level, item } = issues[i]!;
-    const st = level === "error"
-      ? { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft }
-      : { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft };
-    const codeUsed = drawPill(buf, x + 2, rowY, item.code, { ...st, bold: true });
-    const hasJump = Boolean(item.entityId && featureIds.has(item.entityId));
-    const jumpLabel = hasJump ? `Inspect ${item.entityId}` : "";
-    const jumpW = jumpLabel ? jumpLabel.length + 3 : 0;
-    const msgMax = Math.max(10, w - 6 - codeUsed - jumpW);
-    buf.writeText(x + 3 + codeUsed, rowY, item.message, msgMax, { fg: TUI_PALETTE.text });
-    if (hasJump && item.entityId) {
-      drawPill(
-        buf,
-        x + w - 2 - jumpLabel.length - 2,
-        rowY,
-        jumpLabel,
-        { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true },
-        {
-          id: `health-jump-${item.entityId}`,
-          kind: "health-jump",
-          zIndex: HitLayer.healthControl,
-          data: item.entityId,
-        }
-      );
-    }
-    rowY += 1;
+  for (let i = 0; i < visible && state.healthScrollY + i < rows.length; i++) {
+    rows[state.healthScrollY + i]!(top + i, x + 2);
   }
   if (maxScroll > 0) {
-    const position = `${state.healthScrollY + 1}-${Math.min(issues.length, state.healthScrollY + maxRows)}/${issues.length}`;
-    buf.writeText(x + w - 2 - position.length, y + h - 2, position, position.length, {
-      fg: TUI_PALETTE.muted,
-    });
+    const hint = state.healthScrollY < maxScroll
+      ? `▼ ${rows.length - visible - state.healthScrollY} more · PgDn`
+      : "▲ PgUp";
+    buf.writeText(x + w - 2 - textCellWidth(hint), y + h - 1, hint, textCellWidth(hint), { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface });
   }
 }
 
+export type FooterMode =
+  | "roadmap"
+  | "graph"
+  | "activity"
+  | "drawer"
+  | "note"
+  | "confirm"
+  | "picker"
+  | "health"
+  | "help"
+  | "search";
+
+export function footerMode(state: TuiState): FooterMode {
+  if (state.helpOpen) return "help";
+  if (state.healthPanelOpen) return "health";
+  if (state.openPicker) return "picker";
+  if (state.searchFocused) return "search";
+  const drawerOpen = Boolean(state.drawerFeatureId && state.payload.features.some((f) => f.id === state.drawerFeatureId));
+  if (drawerOpen && state.drawerFocus === "note") return "note";
+  if (drawerOpen && state.pendingShip) return "confirm";
+  if (drawerOpen) return "drawer";
+  return state.viewMode;
+}
+
+export function footerHints(state: TuiState): string[] {
+  const filters = Boolean(state.milestoneFilter || state.statusFilter || state.areaFilter || state.search);
+  const frozen = state.payload.check.editable === false;
+  switch (footerMode(state)) {
+    case "help":
+      return ["Esc Close"];
+    case "health":
+      return ["PgUp/PgDn Scroll", "Esc Close"];
+    case "picker":
+      return ["j/k Move", "Enter Choose", "Esc Close"];
+    case "search":
+      return ["Type to filter", "Enter Done"];
+    case "note":
+      return ["Type a note", "Enter Log", "Esc Done"];
+    case "confirm":
+      return ["←/→ Choose", "Enter Confirm", "Esc Cancel"];
+    case "drawer":
+      return [
+        ...(state.drawerFeedback?.kind === "err" ? ["x Dismiss"] : []),
+        ...(frozen ? ["e Health"] : []),
+        "Tab Focus",
+        "Space Toggle",
+        "←/→ Status",
+        "n Note",
+        "PgDn Scroll",
+        "Esc Close",
+      ];
+    case "graph":
+      return ["j/k Select", "Enter Open", "+/- Zoom", "f Fit", "←/→ Pan", ...(filters ? ["c Clear"] : []), "1/2/3 Views", "R Refresh", "h Hover"];
+    case "activity":
+      return ["j/k Move", "Enter Open", "w Window", ...(filters ? ["c Clear"] : []), "1/2/3 Views", "R Refresh"];
+    default:
+      return ["j/k Move", "Enter Open", "/ Search", "s Status", ...(filters ? ["c Clear"] : []), "1/2/3 Views", "R Refresh", "y Copy ID", "m Mouse"];
+  }
+}
+
+export const FOOTER_SUFFIX = "? Help · q Quit";
+export const FOOTER_SUFFIX_TYPING = "Esc first: ? Help · q Quit";
+
+/**
+ * Footer: the active mode's keys, whole hints only, always ending with "? Help · q Quit" (prefixed
+ * with "Esc first:" while typing). A notification replaces the hints, never the suffix.
+ */
 export function renderFooter(buf: ScreenBuffer, y: number, width: number, state: TuiState): void {
   buf.fillRect(0, y, width, 1, { bg: TUI_PALETTE.surface });
+  const mode = footerMode(state);
+  const suffix = mode === "note" || mode === "search" ? FOOTER_SUFFIX_TYPING : FOOTER_SUFFIX;
+  const suffixW = textCellWidth(suffix);
+  const suffixX = Math.max(1, width - 1 - suffixW);
+  buf.writeText(suffixX, y, suffix, suffixW, { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface });
+  const avail = suffixX - 3;
+  if (avail <= 0) return;
   if (state.toast) {
-    const fg =
-      state.toast.kind === "err"
-        ? TUI_PALETTE.red
-        : state.toast.kind === "ok"
-        ? TUI_PALETTE.green
-        : TUI_PALETTE.accent;
-    buf.writeText(1, y, state.toast.message, width - 2, { fg, bold: true });
+    const fg = state.toast.kind === "err" ? TUI_PALETTE.red : state.toast.kind === "ok" ? TUI_PALETTE.green : TUI_PALETTE.accent;
+    buf.writeText(1, y, state.toast.message, avail, { fg, bg: TUI_PALETTE.surface, bold: true });
     return;
   }
-  const hints =
-    state.searchFocused
-      ? "Type to filter features · Backspace delete · Enter/Esc finish search"
-      : state.viewMode === "graph"
-      ? "1/2/3 Views · Drag Pan · Wheel/+/-/Fit/0 Zoom · Click Trace/Open · h Hover · m Mouse · ? Help · q Quit"
-      : "1/2/3 Views · j/k Scroll · / Search · Enter Open Drawer · m Mouse · y Copy ID · R Refresh · ? Help · q Quit";
-  buf.writeText(1, y, hints, width - 2, { fg: TUI_PALETTE.muted });
+  let line = "";
+  for (const hint of footerHints(state)) {
+    const next = line ? `${line} · ${hint}` : hint;
+    if (textCellWidth(next) > avail) break;
+    line = next;
+  }
+  buf.writeText(1, y, line, avail, { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface });
 }

@@ -2,11 +2,16 @@ import type { BeadsClient } from "../beads";
 import { buildRoadmapViewPayload, startLiveWatcher, type LiveWatcherHandle } from "../view";
 import { RoadmapService, type LoadedStore } from "../store";
 import type { CheckResult, FeatureStatus } from "../types";
-import { getDrawerRect, renderFeatureDrawer, renderHelpOverlay } from "./drawer";
+import type { RoadmapViewPayload } from "../dashboard-html";
+import { statusLabel } from "../present";
+import { activityCacheKey, buildActivity } from "../activity";
+import { renderActivityView, visibleActivityEvents } from "./activity-view";
+import { DRAWER_STATUSES, getDrawerRect, renderFeatureDrawer, renderHelpOverlay } from "./drawer";
 import {
   clampGraphCamera,
   computeWaterfallLayout,
   fitGraphCamera,
+  layoutForCamera,
   getGraphViewportRect,
   renderWaterfallGraphView,
   resetGraphCamera,
@@ -19,12 +24,12 @@ import {
   buildPickerOptions,
   computeFilteredData,
   createInitialTuiState,
-  renderBoardView,
-  renderCardsView,
+  ledgerOrder,
   renderFloatingPicker,
   renderFooter,
-  renderHeaderAndKpis,
+  renderHeader,
   renderHealthOverlay,
+  renderLedgerView,
   renderTabsAndFilters,
   pickerVisibleRows,
   type PickerKind,
@@ -69,15 +74,17 @@ export class TuiController {
   private offResize: (() => void) | null = null;
   private stopped = false;
   private lastOrderedIds: string[] = [];
-  private lastCardsMaxScroll = 0;
-  private lastCardsBounds = new Map<string, { y: number; h: number }>();
-  private lastBoardCols: string[] = [];
-  private lastBoardFeatureBounds = new Map<string, { y: number; h: number }>();
-  private lastBoardViewports = new Map<string, { y: number; h: number; maxScroll: number }>();
+  private lastRoadmapMaxScroll = 0;
+  private lastRoadmapBounds = new Map<string, { y: number; h: number }>();
+  private lastActivityMaxScroll = 0;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private feedbackTimer: ReturnType<typeof setTimeout> | null = null;
   private lastGraphLayout: WaterfallLayout | null = null;
   private lastDrawerMaxScroll = 0;
   /** One-shot: next frame scrolls the drawer so the focused note input is visible. */
   private noteRevealPending = false;
+  /** One-shot: next frame keeps the control with fresh feedback on screen. */
+  private feedbackRevealPending = false;
   private liveWatch: LiveWatcherHandle | null = null;
   private watchDebounce: ReturnType<typeof setTimeout> | null = null;
   private mainRect: Rect = { x: 0, y: 0, w: 80, h: 20 };
@@ -118,15 +125,13 @@ export class TuiController {
         config: loaded.config,
         milestones,
         features: loaded.features,
-        check: {
-          ok: fastCheck.ok,
-          errors: fastCheck.errors,
-          warnings: fastCheck.warnings,
-        },
+        check: checkPayload(fastCheck),
         beads: {},
       },
       { noBeads: Boolean(options.noBeads), beadsLoading: beadsWanted, liveWatchActive: true }
     );
+    // The initial selection is the first feature on screen (ledger order), not the first by order.
+    this.state.selectedFeatureId = ledgerOrder(this.state)[0] ?? null;
     this.currentBuf = new ScreenBuffer(this.session.width, this.session.height);
   }
 
@@ -168,6 +173,10 @@ export class TuiController {
       clearTimeout(this.watchDebounce);
       this.watchDebounce = null;
     }
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    if (this.feedbackTimer) clearTimeout(this.feedbackTimer);
+    this.toastTimer = null;
+    this.feedbackTimer = null;
     // Cancels pending watch reloads and closes every underlying watcher, including resolved
     // symlink-target watches, so no further frames or reloads run after teardown.
     this.liveWatch?.close();
@@ -233,7 +242,7 @@ export class TuiController {
     buf.clear({ bg: TUI_PALETTE.bg, fg: TUI_PALETTE.text });
 
     const filtered = computeFilteredData(this.state);
-    const header = renderHeaderAndKpis(buf, w, this.state, filtered);
+    const header = renderHeader(buf, w, this.state, filtered);
     const y = renderTabsAndFilters(buf, header.nextY, w, this.state, filtered, header.tabsInHeader);
 
     const contentH = Math.max(4, h - y - 1);
@@ -245,18 +254,17 @@ export class TuiController {
     const rect: Rect = { x: 0, y, w: mainW, h: contentH };
     this.mainRect = rect;
 
-    if (this.state.viewMode === "cards") {
-      const res = renderCardsView(buf, rect, this.state, filtered);
-      this.lastCardsMaxScroll = res.maxScrollY;
+    if (this.state.viewMode === "roadmap") {
+      const res = renderLedgerView(buf, rect, this.state, filtered);
+      this.lastRoadmapMaxScroll = res.maxScrollY;
       this.lastOrderedIds = res.orderedFeatureIds;
-      this.lastCardsBounds = res.featureBounds;
+      this.lastRoadmapBounds = res.featureBounds;
       this.lastGraphLayout = null;
-    } else if (this.state.viewMode === "board") {
-      const res = renderBoardView(buf, rect, this.state, filtered);
-      this.lastBoardCols = res.columns;
+    } else if (this.state.viewMode === "activity") {
+      if (!this.state.activity) this.loadActivity();
+      const res = renderActivityView(buf, rect, this.state);
       this.lastOrderedIds = res.orderedFeatureIds;
-      this.lastBoardFeatureBounds = res.featureBounds;
-      this.lastBoardViewports = res.columnViewports;
+      this.lastActivityMaxScroll = res.maxScrollY;
       this.lastGraphLayout = null;
     } else {
       this.lastGraphLayout = renderWaterfallGraphView(buf, rect, this.state, filtered);
@@ -267,8 +275,10 @@ export class TuiController {
 
     const drawerResult = renderFeatureDrawer(buf, w, h, y, this.state, {
       revealNote: this.noteRevealPending,
+      revealKey: this.feedbackRevealPending ? this.state.drawerFeedback?.key : undefined,
     });
     this.noteRevealPending = false;
+    this.feedbackRevealPending = false;
     this.lastDrawerMaxScroll = drawerResult ? drawerResult.maxScrollY : 0;
     renderFloatingPicker(buf, w, h, this.state);
     renderHealthOverlay(buf, w, h, this.state);
@@ -326,10 +336,24 @@ export class TuiController {
         this.render();
         return;
       }
+      if (ev.key === "q") {
+        this.stop();
+        return;
+      }
+      if (ev.key === "?") {
+        this.state.openPicker = null;
+        this.state.helpOpen = true;
+        this.render();
+      }
+      return;
     }
 
     if (this.state.helpOpen) {
-      if (ev.key === "escape" || ev.key === "?" || ev.key === "q") {
+      if (ev.key === "q") {
+        this.stop();
+        return;
+      }
+      if (ev.key === "escape" || ev.key === "?") {
         this.state.helpOpen = false;
         this.render();
       }
@@ -337,18 +361,27 @@ export class TuiController {
     }
 
     if (this.state.healthPanelOpen) {
+      if (ev.key === "q") {
+        this.stop();
+        return;
+      }
+      if (ev.key === "?") {
+        this.state.helpOpen = true;
+        this.render();
+        return;
+      }
       if (ev.key === "escape") {
         this.state.healthPanelOpen = false;
         this.render();
         return;
       }
-      if (ev.key === "pagedown") {
-        this.state.healthScrollY += 4;
+      if (ev.key === "pagedown" || ev.key === "down" || ev.key === "j") {
+        this.state.healthScrollY += ev.key === "pagedown" ? 4 : 1;
         this.render();
         return;
       }
-      if (ev.key === "pageup") {
-        this.state.healthScrollY = Math.max(0, this.state.healthScrollY - 4);
+      if (ev.key === "pageup" || ev.key === "up" || ev.key === "k") {
+        this.state.healthScrollY = Math.max(0, this.state.healthScrollY - (ev.key === "pageup" ? 4 : 1));
         this.render();
         return;
       }
@@ -363,15 +396,13 @@ export class TuiController {
       }
       if (ev.key === "backspace") {
         this.state.search = segmentText(this.state.search).slice(0, -1).join("");
-        this.state.cardsScrollY = 0;
-        this.reconcileSelection();
+        this.afterFilterChange();
         this.render();
         return;
       }
       if (!ev.ctrl && !ev.alt && isPrintableTextInput(ev.key)) {
         this.state.search += ev.key;
-        this.state.cardsScrollY = 0;
-        this.reconcileSelection();
+        this.afterFilterChange();
         this.render();
         return;
       }
@@ -392,6 +423,7 @@ export class TuiController {
       this.state.drawerFeatureId = null;
       this.state.drawerFocus = "criteria";
       this.state.drawerFeedback = null;
+      this.state.pendingShip = null;
     }
 
     if (ev.key === "q") {
@@ -410,47 +442,99 @@ export class TuiController {
       return;
     }
 
+    const feature = this.state.drawerFeatureId
+      ? this.state.payload.features.find((f) => f.id === this.state.drawerFeatureId)
+      : undefined;
+
+    // Ship confirmation inside the drawer: ←/→ choose, Enter confirms, Esc cancels.
+    if (feature && this.state.pendingShip && this.state.pendingShip.featureId === feature.id) {
+      if (ev.key === "left" || ev.key === "h" || ev.key === "shift-tab") {
+        this.state.pendingShip.choice = (this.state.pendingShip.choice + 2) % 3;
+        this.render();
+        return;
+      }
+      if (ev.key === "right" || ev.key === "l" || ev.key === "tab") {
+        this.state.pendingShip.choice = (this.state.pendingShip.choice + 1) % 3;
+        this.render();
+        return;
+      }
+      if (ev.key === "enter" || ev.key === " ") {
+        this.confirmShip(feature.id, this.state.pendingShip.choice);
+        return;
+      }
+      if (ev.key === "escape") {
+        this.confirmShip(feature.id, 2);
+        return;
+      }
+      return;
+    }
+
     if (ev.key === "escape") {
       if (this.state.drawerFeatureId) {
         this.closeDrawer();
       } else if (this.state.toast) {
-        this.state.toast = null;
+        this.clearToast();
         this.render();
       }
       return;
     }
 
-    if (this.state.drawerFeatureId) {
-      const feature = this.state.payload.features.find((f) => f.id === this.state.drawerFeatureId);
-      if (ev.key === "n") {
-        this.focusDrawerNote(this.state.drawerFeatureId);
-        return;
-      }
-      if (ev.key === "tab") {
-        if (this.state.drawerFocus === "criteria") {
-          this.focusDrawerNote(this.state.drawerFeatureId);
-          return;
-        }
-        this.state.drawerFocus = "criteria";
+    if (feature) {
+      if (ev.key === "x" && this.state.drawerFeedback) {
+        this.state.drawerFeedback = null;
         this.render();
         return;
       }
-      if (ev.key === " " && feature && feature.ship_criteria.length > 0) {
+      if (ev.key === "e") {
+        this.state.healthPanelOpen = true;
+        this.state.healthScrollY = 0;
+        this.render();
+        return;
+      }
+      if (ev.key === "n") {
+        if (this.refuseIfFrozen(feature.id, "note")) return;
+        this.focusDrawerNote(feature.id);
+        return;
+      }
+      if (ev.key === "tab" || ev.key === "shift-tab") {
+        // Tab moves between the status pills and the criteria (n types a note).
+        const next = this.state.drawerFocus === "status" ? "criteria" : "status";
+        this.state.drawerFocus = next;
+        if (next === "status") this.state.drawerStatusIndex = Math.max(0, DRAWER_STATUSES.indexOf(feature.status));
+        this.render();
+        return;
+      }
+      if (this.state.drawerFocus === "status") {
+        if (ev.key === "left" || ev.key === "h") {
+          this.state.drawerStatusIndex = (this.state.drawerStatusIndex + DRAWER_STATUSES.length - 1) % DRAWER_STATUSES.length;
+          this.render();
+          return;
+        }
+        if (ev.key === "right" || ev.key === "l") {
+          this.state.drawerStatusIndex = (this.state.drawerStatusIndex + 1) % DRAWER_STATUSES.length;
+          this.render();
+          return;
+        }
+        if (ev.key === "enter" || ev.key === " ") {
+          this.updateFeatureStatus(feature.id, DRAWER_STATUSES[this.state.drawerStatusIndex]!);
+          return;
+        }
+      }
+      if (ev.key === " " && feature.ship_criteria.length > 0) {
         const crit = feature.ship_criteria[this.state.drawerCriterionIndex];
         if (crit) {
           this.toggleCriterion(feature.id, crit.id, !crit.done);
         }
         return;
       }
-      if ((ev.key === "down" || ev.key === "j") && feature && feature.ship_criteria.length > 0) {
-        this.state.drawerCriterionIndex = Math.min(
-          feature.ship_criteria.length - 1,
-          this.state.drawerCriterionIndex + 1
-        );
+      if ((ev.key === "down" || ev.key === "j") && feature.ship_criteria.length > 0) {
+        this.state.drawerFocus = "criteria";
+        this.state.drawerCriterionIndex = Math.min(feature.ship_criteria.length - 1, this.state.drawerCriterionIndex + 1);
         this.render();
         return;
       }
-      if ((ev.key === "up" || ev.key === "k") && feature && feature.ship_criteria.length > 0) {
+      if ((ev.key === "up" || ev.key === "k") && feature.ship_criteria.length > 0) {
+        this.state.drawerFocus = "criteria";
         this.state.drawerCriterionIndex = Math.max(0, this.state.drawerCriterionIndex - 1);
         this.render();
         return;
@@ -468,7 +552,7 @@ export class TuiController {
     }
 
     if (ev.key === "1") {
-      this.switchView("cards");
+      this.switchView("roadmap");
       return;
     }
     if (ev.key === "2") {
@@ -476,7 +560,7 @@ export class TuiController {
       return;
     }
     if (ev.key === "3") {
-      this.switchView("board");
+      this.switchView("activity");
       return;
     }
     if (ev.key === "/") {
@@ -489,7 +573,47 @@ export class TuiController {
       return;
     }
     if (ev.key === "R") {
-      this.reloadSync();
+      this.refresh();
+      return;
+    }
+    if (!feature) {
+      if (ev.key === "s" || ev.key === "a" || ev.key === "M") {
+        this.openPicker(ev.key === "s" ? "status" : ev.key === "a" ? "area" : "milestone", 1, 3);
+        return;
+      }
+      if (ev.key === "c") {
+        this.resetFilters();
+        return;
+      }
+    }
+    if (this.state.viewMode === "activity") {
+      if (ev.key === "w") {
+        this.state.activityWindow = this.state.activityWindow === "7d" ? "30d" : "7d";
+        this.state.activitySelectedIndex = 0;
+        this.state.activityScrollY = 0;
+        this.loadActivity();
+        this.render();
+        return;
+      }
+      if (ev.key === "down" || ev.key === "j" || ev.key === "up" || ev.key === "k") {
+        const total = visibleActivityEvents(this.state).length;
+        const delta = ev.key === "down" || ev.key === "j" ? 1 : -1;
+        this.state.activitySelectedIndex = Math.max(0, Math.min(total - 1, this.state.activitySelectedIndex + delta));
+        this.render();
+        return;
+      }
+      if (ev.key === "pagedown" || ev.key === "pageup") {
+        const total = visibleActivityEvents(this.state).length;
+        const delta = ev.key === "pagedown" ? 6 : -6;
+        this.state.activitySelectedIndex = Math.max(0, Math.min(total - 1, this.state.activitySelectedIndex + delta));
+        this.render();
+        return;
+      }
+      if (ev.key === "enter") {
+        const entry = visibleActivityEvents(this.state)[this.state.activitySelectedIndex];
+        if (entry && this.state.payload.features.some((f) => f.id === entry.featureId)) this.openDrawer(entry.featureId);
+        return;
+      }
       return;
     }
     if (this.state.viewMode === "graph") {
@@ -677,8 +801,33 @@ export class TuiController {
       }
       case "drawer-status": {
         if (this.state.drawerFeatureId) {
+          this.state.drawerFocus = "status";
+          this.state.drawerStatusIndex = Math.max(0, DRAWER_STATUSES.indexOf(String(hit.data) as FeatureStatus));
           this.updateFeatureStatus(this.state.drawerFeatureId, String(hit.data) as FeatureStatus);
         }
+        break;
+      }
+      case "drawer-ship-choice": {
+        if (this.state.drawerFeatureId) this.confirmShip(this.state.drawerFeatureId, Number(hit.data ?? 2));
+        break;
+      }
+      case "drawer-dismiss": {
+        this.state.drawerFeedback = null;
+        this.render();
+        break;
+      }
+      case "drawer-freeze": {
+        this.state.healthPanelOpen = true;
+        this.state.healthScrollY = 0;
+        this.render();
+        break;
+      }
+      case "activity-entry": {
+        const idx = Number(hit.data ?? 0);
+        this.state.activitySelectedIndex = idx;
+        const entry = visibleActivityEvents(this.state)[idx];
+        if (entry && this.state.payload.features.some((f) => f.id === entry.featureId)) this.openDrawer(entry.featureId);
+        else this.render();
         break;
       }
       case "drawer-criterion": {
@@ -760,24 +909,10 @@ export class TuiController {
         const info = hit.data as { kind: PickerKind; anchorX: number; anchorY: number };
         if (this.state.openPicker?.kind === info.kind) {
           this.state.openPicker = null;
+          this.render();
         } else {
-          const filtered = computeFilteredData(this.state);
-          const options = buildPickerOptions(info.kind, this.state, filtered);
-          const activeVal =
-            info.kind === "milestone"
-              ? this.state.milestoneFilter
-              : info.kind === "status"
-              ? this.state.statusFilter
-              : this.state.areaFilter;
-          this.state.openPicker = { kind: info.kind, x: info.anchorX, y: info.anchorY, options };
-          this.state.pickerSelectedIndex = Math.max(
-            0,
-            options.findIndex((o) => o.value === activeVal)
-          );
-          this.state.pickerScrollY = 0;
-          this.ensurePickerRowVisible(this.state.pickerSelectedIndex);
+          this.openPicker(info.kind, info.anchorX, info.anchorY);
         }
-        this.render();
         break;
       }
       case "picker-option": {
@@ -804,15 +939,7 @@ export class TuiController {
         break;
       }
       case "reset-filters": {
-        this.state.milestoneFilter = "";
-        this.state.statusFilter = "";
-        this.state.areaFilter = "";
-        this.state.search = "";
-        this.state.cardsScrollY = 0;
-        this.state.boardScrollY = {};
-        this.state.openPicker = null;
-        this.reconcileSelection();
-        this.render();
+        this.resetFilters();
         break;
       }
       case "health-toggle": {
@@ -841,32 +968,19 @@ export class TuiController {
         break;
       }
       case "refresh-btn": {
-        this.reloadSync();
-        this.state.toast = { kind: "info", message: "Refreshed roadmap from disk" };
-        this.render();
+        this.refresh();
         break;
       }
-      case "kpi-filter": {
+      case "dist-filter": {
         const target = String(hit.data ?? "");
-        this.state.statusFilter = !target
-          ? ""
-          : this.state.statusFilter === target
-          ? ""
-          : target;
-        this.state.cardsScrollY = 0;
-        this.state.boardScrollY = {};
+        this.state.statusFilter = this.state.statusFilter === target ? "" : target;
         this.state.openPicker = null;
-        this.reconcileSelection();
+        this.afterFilterChange();
         this.render();
         break;
       }
       case "quit-btn": {
         this.stop();
-        break;
-      }
-      case "board-tab": {
-        this.state.boardActiveCol = Number(hit.data ?? 0);
-        this.render();
         break;
       }
       case "feature-card": {
@@ -890,9 +1004,31 @@ export class TuiController {
     });
   }
 
+  /** Entering a view selects its first visible item; no drawer opens. */
   private switchView(mode: TuiViewMode): void {
     this.state.viewMode = mode;
     this.state.openPicker = null;
+    this.state.drawerFeatureId = null;
+    this.state.drawerFocus = "criteria";
+    this.state.pendingShip = null;
+    this.state.drawerFeedback = null;
+    if (mode === "roadmap") {
+      this.state.roadmapScrollY = 0;
+      this.state.selectedFeatureId = ledgerOrder(this.state)[0] ?? null;
+    } else if (mode === "graph") {
+      // Fit on entry; select the first node in graph order.
+      this.state.graphCamera.initialized = false;
+      const filtered = computeFilteredData(this.state);
+      const layout = computeWaterfallLayout(filtered.filteredFeatures, this.state.payload.milestones, "overview");
+      const first = layout.orderedNodes[0]?.feature.id ?? null;
+      this.state.graphSelectedId = first;
+      this.state.selectedFeatureId = first;
+      this.state.graphHoverId = null;
+    } else {
+      this.state.activitySelectedIndex = 0;
+      this.state.activityScrollY = 0;
+      this.loadActivity();
+    }
     this.syncMouseMode();
     this.render();
   }
@@ -901,24 +1037,124 @@ export class TuiController {
     if (kind === "milestone") this.state.milestoneFilter = value;
     else if (kind === "status") this.state.statusFilter = value;
     else this.state.areaFilter = value;
-    this.state.cardsScrollY = 0;
-    this.state.boardScrollY = {};
+    this.afterFilterChange();
+  }
+
+  /** Scroll positions restart and the selection moves to a visible item after any filter change. */
+  private afterFilterChange(): void {
+    this.state.roadmapScrollY = 0;
+    this.state.activityScrollY = 0;
+    this.state.activitySelectedIndex = 0;
     this.reconcileSelection();
+  }
+
+  private resetFilters(): void {
+    this.state.milestoneFilter = "";
+    this.state.statusFilter = "";
+    this.state.areaFilter = "";
+    this.state.search = "";
+    this.state.openPicker = null;
+    this.afterFilterChange();
+    this.render();
+  }
+
+  private openPicker(kind: PickerKind, anchorX: number, anchorY: number): void {
+    const filtered = computeFilteredData(this.state);
+    const options = buildPickerOptions(kind, this.state, filtered);
+    const activeVal = kind === "milestone" ? this.state.milestoneFilter : kind === "status" ? this.state.statusFilter : this.state.areaFilter;
+    this.state.openPicker = { kind, x: anchorX, y: anchorY, options };
+    this.state.pickerSelectedIndex = Math.max(0, options.findIndex((o) => o.value === activeVal));
+    this.state.pickerScrollY = 0;
+    this.ensurePickerRowVisible(this.state.pickerSelectedIndex);
+    this.render();
+  }
+
+  /** Builds (or reuses) the Activity feed for the current window. Errors become the error state. */
+  private loadActivity(): void {
+    try {
+      const key = activityCacheKey(this.service, this.state.activityWindow);
+      if (this.state.activity?.key === key && this.state.activity.result) return;
+      this.state.activity = { key, result: buildActivity(this.service, { since: this.state.activityWindow }), error: null };
+    } catch (error) {
+      this.state.activity = { key: "", result: null, error: (error as Error).message || "Failed to load activity" };
+    }
+  }
+
+  private setToast(kind: "ok" | "err" | "info", message: string): void {
+    this.state.toast = { kind, message };
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    // Transient notifications expire after 3 seconds; persistent drawer errors are separate state.
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = null;
+      if (this.stopped) return;
+      this.state.toast = null;
+      this.render();
+    }, 3000);
+  }
+
+  private clearToast(): void {
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = null;
+    this.state.toast = null;
+  }
+
+  /** Feedback on the control that changed. Successes fade after 3 s; failures stay until dismissed. */
+  private setDrawerFeedback(key: string, kind: "ok" | "err" | "info", message: string): void {
+    const fb = { key, kind, message };
+    this.state.drawerFeedback = fb;
+    this.feedbackRevealPending = true;
+    if (this.feedbackTimer) clearTimeout(this.feedbackTimer);
+    this.feedbackTimer = null;
+    if (kind !== "err") {
+      this.feedbackTimer = setTimeout(() => {
+        this.feedbackTimer = null;
+        if (this.stopped || this.state.drawerFeedback !== fb) return;
+        this.state.drawerFeedback = null;
+        this.render();
+      }, 3000);
+    }
+  }
+
+  private isFrozen(): boolean {
+    return this.state.payload.check.editable === false;
+  }
+
+  /** Refuses an edit while the roadmap has write-blocking errors, saying so on the control. */
+  private refuseIfFrozen(featureId: string, key: string): boolean {
+    if (!this.isFrozen()) return false;
+    const n = (this.state.payload.check.blocking ?? this.state.payload.check.errors).length;
+    this.state.drawerFeatureId = featureId;
+    this.setDrawerFeedback(key, "err", `Editing paused — ${n} ${n === 1 ? "error" : "errors"} to fix first. Press e for Health.`);
+    this.render();
+    return true;
+  }
+
+  /** Outcome-aware refresh shared by R and the Live pill. */
+  private refresh(): void {
+    const ok = this.reloadSync();
+    if (ok) {
+      if (this.state.viewMode === "activity") {
+        this.state.activity = null;
+        this.loadActivity();
+      }
+      this.setToast("ok", "Refreshed from disk");
+    } else {
+      this.setToast("err", `Refresh failed: ${this.state.loadError ?? "unknown error"}`);
+    }
+    this.render();
   }
 
   private toggleMouse(): void {
     this.state.mouseEnabled = !this.state.mouseEnabled;
     this.syncMouseMode();
-    this.state.toast = {
-      kind: "info",
-      message: this.state.mouseEnabled
-        ? "Mouse mode ON (press m to toggle native text selection)"
-        : "Mouse mode OFF (native drag-select enabled; press m to re-enable)",
-    };
+    this.setToast(
+      "info",
+      this.state.mouseEnabled ? "Mouse on (m turns it off for native selection)" : "Mouse off: native selection works; m turns it back on"
+    );
     this.render();
   }
 
-  private reloadSync(options: { preserveFeedback?: boolean } = {}): void {
+  private reloadSync(options: { preserveFeedback?: boolean } = {}): boolean {
     let loaded: LoadedStore;
     let fastCheck: CheckResult;
     try {
@@ -928,7 +1164,7 @@ export class TuiController {
       // Config can be transiently missing or malformed while a watcher or manual reload fires.
       // Keep the last good snapshot on screen, surface the failure, and recover on repair.
       this.handleReloadFailure(error);
-      return;
+      return false;
     }
     const hadLoadError = this.state.loadError !== null;
     const knownIds = new Set(loaded.milestones.map((m) => m.id));
@@ -948,7 +1184,7 @@ export class TuiController {
       config: loaded.config,
       milestones,
       features: loaded.features,
-      check: { ok: fastCheck.ok, errors: fastCheck.errors, warnings: fastCheck.warnings },
+      check: checkPayload(fastCheck),
       // Prior Beads data must not survive a snapshot where Beads is out of scope.
       beads: beadsWanted ? this.state.payload.beads : {},
     };
@@ -959,22 +1195,25 @@ export class TuiController {
       this.loadGeneration++;
       this.state.beadsLoading = false;
     }
-    if (!options.preserveFeedback) {
+    // Reloads clear transient feedback; a failure stays on its control until dismissed.
+    if (!options.preserveFeedback && this.state.drawerFeedback?.kind !== "err") {
       this.state.drawerFeedback = null;
     }
     if (hadLoadError) {
       this.state.loadError = null;
-      this.state.toast = { kind: "ok", message: "Recovered roadmap from disk" };
+      this.setToast("ok", "Recovered roadmap from disk");
     }
+    if (this.state.viewMode === "activity" && this.state.activity) this.loadActivity();
     this.reconcileAfterPayloadChange();
     this.render();
+    return true;
   }
 
   private handleReloadFailure(error: unknown): void {
     const message = (error as Error).message || "Unknown reload failure";
     this.state.loadError = message;
     this.state.beadsLoading = false;
-    this.state.toast = { kind: "err", message: `Reload failed: ${message}` };
+    this.setToast("err", `Reload failed: ${message}`);
     this.render();
   }
 
@@ -986,6 +1225,7 @@ export class TuiController {
     this.state.drawerFocus = "criteria";
     this.state.drawerCriterionIndex = 0;
     this.state.drawerFeedback = null;
+    this.state.pendingShip = null;
     this.render();
   }
 
@@ -993,6 +1233,7 @@ export class TuiController {
     this.state.drawerFeatureId = null;
     this.state.drawerFocus = "criteria";
     this.state.drawerFeedback = null;
+    this.state.pendingShip = null;
     this.render();
   }
 
@@ -1020,33 +1261,70 @@ export class TuiController {
         this.state.selectedFeatureId) ||
       null;
     if (!target) {
-      this.state.toast = { kind: "info", message: "No feature selected to copy" };
+      this.setToast("info", "No feature selected to copy");
       this.render();
       return;
     }
     this.session.copyToClipboard(target);
-    this.state.toast = { kind: "ok", message: `Copied ID to clipboard: ${target}` };
+    this.setToast("ok", `Copied ID to clipboard: ${target}`);
     this.render();
   }
 
   private toggleCriterion(featureId: string, criterionId: string, done: boolean): void {
+    const key = `crit:${criterionId}`;
+    if (this.refuseIfFrozen(featureId, key)) return;
     try {
       this.service.checkFeatureCriterion(featureId, criterionId, done);
-      this.state.drawerFeedback = { kind: "ok", message: "Saved criterion update" };
+      this.setDrawerFeedback(key, "ok", done ? "Saved — done" : "Saved — reopened");
+      this.setToast("ok", "Saved criterion");
       this.reloadSync({ preserveFeedback: true });
     } catch (error) {
-      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.setDrawerFeedback(key, "err", `Couldn't save: ${(error as Error).message}`);
       this.render();
     }
   }
 
+  /** Choosing shipped with open criteria opens the confirm first (soft invariant). */
   private updateFeatureStatus(featureId: string, status: FeatureStatus): void {
+    if (this.refuseIfFrozen(featureId, "status")) return;
+    const feature = this.state.payload.features.find((f) => f.id === featureId);
+    if (!feature || feature.status === status) {
+      this.render();
+      return;
+    }
+    if (status === "shipped" && feature.ship_criteria.some((c) => !c.done)) {
+      this.state.pendingShip = { featureId, choice: 0 };
+      this.render();
+      return;
+    }
+    this.writeStatus(featureId, { id: featureId, status }, `Saved — ${statusLabel(status)}`);
+  }
+
+  private confirmShip(featureId: string, choice: number): void {
+    const feature = this.state.payload.features.find((f) => f.id === featureId);
+    this.state.pendingShip = null;
+    if (!feature || choice === 2) {
+      this.state.drawerFocus = "status";
+      this.state.drawerStatusIndex = DRAWER_STATUSES.indexOf("shipped");
+      this.render();
+      return;
+    }
+    const open = feature.ship_criteria.filter((c) => !c.done).map((c) => c.id);
+    if (choice === 0) {
+      this.writeStatus(featureId, { id: featureId, status: "shipped", check_criteria: open }, "Saved — shipped with every criterion done");
+    } else {
+      this.writeStatus(featureId, { id: featureId, status: "shipped" }, "Saved — shipped with open criteria");
+    }
+  }
+
+  private writeStatus(featureId: string, input: { id: string; status: FeatureStatus; check_criteria?: string[] }, okMessage: string): void {
     try {
-      this.service.updateFeature(featureId, { status });
-      this.state.drawerFeedback = { kind: "ok", message: `Saved status: ${status}` };
+      this.service.logFeaturePulse(input);
+      this.setDrawerFeedback("status", "ok", okMessage);
+      this.setToast("ok", okMessage);
       this.reloadSync({ preserveFeedback: true });
     } catch (error) {
-      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.setDrawerFeedback("status", "err", `Couldn't save: ${(error as Error).message}`);
       this.render();
     }
   }
@@ -1054,14 +1332,16 @@ export class TuiController {
   private submitPulseNote(featureId: string): void {
     const note = (this.state.noteDrafts[featureId] ?? "").trim();
     if (!note) return;
+    if (this.refuseIfFrozen(featureId, "note")) return;
     try {
       this.service.addFeatureNote(featureId, note);
       delete this.state.noteDrafts[featureId];
       this.state.noteCursor = 0;
-      this.state.drawerFeedback = { kind: "ok", message: "Logged pulse note" };
+      this.setDrawerFeedback("note", "ok", "Logged");
+      this.setToast("ok", "Logged note");
       this.reloadSync({ preserveFeedback: true });
     } catch (error) {
-      this.state.drawerFeedback = { kind: "err", message: (error as Error).message };
+      this.setDrawerFeedback("note", "err", `Couldn't save: ${(error as Error).message}`);
       this.render();
     }
   }
@@ -1157,33 +1437,17 @@ export class TuiController {
    * every keyboard selection stays on screen (replacing the old fixed two-row nudge).
    */
   private revealListSelection(featureId: string): void {
-    if (this.state.viewMode === "cards") {
-      const bounds = this.lastCardsBounds.get(featureId);
-      if (!bounds) return;
-      const viewH = Math.max(1, this.mainRect.h);
-      let scroll = this.state.cardsScrollY;
-      if (bounds.y < scroll) {
-        scroll = bounds.y;
-      } else if (bounds.y + bounds.h > scroll + viewH) {
-        scroll = bounds.y + bounds.h - viewH;
-      }
-      this.state.cardsScrollY = Math.max(0, Math.min(this.lastCardsMaxScroll, scroll));
-      return;
+    if (this.state.viewMode !== "roadmap") return;
+    const bounds = this.lastRoadmapBounds.get(featureId);
+    if (!bounds) return;
+    const viewH = Math.max(1, this.mainRect.h);
+    let scroll = this.state.roadmapScrollY;
+    if (bounds.y < scroll) {
+      scroll = bounds.y;
+    } else if (bounds.y + bounds.h > scroll + viewH) {
+      scroll = bounds.y + bounds.h - viewH;
     }
-    if (this.state.viewMode === "board") {
-      const feature = this.state.payload.features.find((f) => f.id === featureId);
-      if (!feature) return;
-      const viewport = this.lastBoardViewports.get(feature.status);
-      const bounds = this.lastBoardFeatureBounds.get(featureId);
-      if (!viewport || !bounds) return;
-      let scroll = this.state.boardScrollY[feature.status] ?? 0;
-      if (bounds.y < scroll) {
-        scroll = bounds.y;
-      } else if (bounds.y + bounds.h > scroll + viewport.h) {
-        scroll = bounds.y + bounds.h - viewport.h;
-      }
-      this.state.boardScrollY[feature.status] = Math.max(0, Math.min(viewport.maxScroll, scroll));
-    }
+    this.state.roadmapScrollY = Math.max(0, Math.min(this.lastRoadmapMaxScroll, scroll));
   }
 
   /**
@@ -1259,7 +1523,7 @@ export class TuiController {
       }
       return;
     }
-    const next = filteredFeatures[0]?.id ?? null;
+    const next = ledgerOrder(this.state)[0] ?? filteredFeatures[0]?.id ?? null;
     this.state.selectedFeatureId = next;
     this.state.graphSelectedId = next;
   }
@@ -1275,6 +1539,7 @@ export class TuiController {
       this.state.drawerFeatureId = null;
       this.state.drawerFocus = "criteria";
       this.state.drawerFeedback = null;
+      this.state.pendingShip = null;
       delete this.state.noteDrafts[drawerId];
       this.state.noteCursor = 0;
     }
@@ -1369,55 +1634,38 @@ export class TuiController {
   }
 
   private scrollActiveView(delta: number): void {
-    if (this.state.viewMode === "cards") {
-      this.state.cardsScrollY = Math.max(
-        0,
-        Math.min(this.lastCardsMaxScroll, this.state.cardsScrollY + delta)
-      );
-    } else if (this.state.viewMode === "board") {
-      const col = this.lastBoardCols[this.state.boardActiveCol] ?? "planned";
-      this.state.boardScrollY[col] = Math.max(0, (this.state.boardScrollY[col] ?? 0) + delta);
+    if (this.state.viewMode === "roadmap") {
+      this.state.roadmapScrollY = Math.max(0, Math.min(this.lastRoadmapMaxScroll, this.state.roadmapScrollY + delta));
+    } else if (this.state.viewMode === "activity") {
+      const total = visibleActivityEvents(this.state).length;
+      this.state.activitySelectedIndex = Math.max(0, Math.min(total - 1, this.state.activitySelectedIndex + delta));
     }
     this.render();
   }
 
-  private scrollAtPoint(_x: number, _y: number, delta: number, hit: HitRegion | null): void {
-    if (this.state.viewMode === "cards") {
-      this.state.cardsScrollY = Math.max(
-        0,
-        Math.min(this.lastCardsMaxScroll, this.state.cardsScrollY + delta)
-      );
+  private scrollAtPoint(_x: number, _y: number, delta: number, _hit: HitRegion | null): void {
+    if (this.state.viewMode === "roadmap") {
+      this.state.roadmapScrollY = Math.max(0, Math.min(this.lastRoadmapMaxScroll, this.state.roadmapScrollY + delta));
       this.render();
       return;
     }
-    if (this.state.viewMode === "board") {
-      const col =
-        this.boardColumnAtPoint(hit) ??
-        this.lastBoardCols[this.state.boardActiveCol] ??
-        "planned";
-      this.state.boardScrollY[col] = Math.max(0, (this.state.boardScrollY[col] ?? 0) + delta);
+    if (this.state.viewMode === "activity") {
+      this.state.activityScrollY = Math.max(0, Math.min(this.lastActivityMaxScroll, this.state.activityScrollY + delta));
       this.render();
     }
   }
+}
 
-  /**
-   * Resolves the board column a wheel event landed on. Visible cards carry their own
-   * higher-priority hit region, so a card hit maps to its feature's status column;
-   * only an explicit column backdrop hit (or an unmatched hit) falls back to callers'
-   * active-column default.
-   */
-  private boardColumnAtPoint(hit: HitRegion | null): string | null {
-    if (!hit) return null;
-    if (hit.kind === "board-col") return String(hit.data);
-    if (hit.kind === "feature-card") {
-      const featureId = String(hit.data ?? "");
-      const feature = this.state.payload.features.find((f) => f.id === featureId);
-      if (feature && this.lastBoardCols.includes(feature.status)) {
-        return feature.status;
-      }
-    }
-    return null;
-  }
+/** The check fields the TUI payload carries (editable/blocking/stale drive the drawer freeze). */
+function checkPayload(check: CheckResult): RoadmapViewPayload["check"] {
+  return {
+    ok: check.ok,
+    errors: check.errors,
+    warnings: check.warnings,
+    editable: check.editable ?? check.ok,
+    blocking: check.blocking ?? check.errors,
+    stale: check.stale ?? false,
+  };
 }
 
 export interface RunTuiOptions {

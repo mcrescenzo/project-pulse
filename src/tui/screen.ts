@@ -509,3 +509,45 @@ export function diffBuffers(prev: ScreenBuffer | null, next: ScreenBuffer, color
   out.push("\x1b[0m\x1b[?2026l");
   return out.join("");
 }
+
+/**
+ * Word-wraps sanitized text to `width` terminal cells; words wider than a line are hard-wrapped
+ * on grapheme boundaries so wide and combining glyphs never split.
+ */
+export function wrapCells(text: string, width: number): string[] {
+  const clean = sanitizeTerminalText(text).trim();
+  if (!clean) return [];
+  const safeW = Math.max(4, width);
+  const lines: string[] = [];
+  let line = "";
+  const hard = (word: string): void => {
+    let chunk = "";
+    let chunkW = 0;
+    for (const glyph of segmentText(word)) {
+      const gw = glyphCellWidth(glyph);
+      if (chunk && chunkW + gw > safeW) {
+        lines.push(chunk);
+        chunk = "";
+        chunkW = 0;
+      }
+      chunk += glyph;
+      chunkW += gw;
+    }
+    line = chunk;
+  };
+  for (const word of clean.split(/\s+/)) {
+    const wW = textCellWidth(word);
+    if (!line) {
+      if (wW <= safeW) line = word;
+      else hard(word);
+    } else if (textCellWidth(line) + 1 + wW <= safeW) {
+      line += " " + word;
+    } else {
+      lines.push(line);
+      if (wW <= safeW) line = word;
+      else hard(word);
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}

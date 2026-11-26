@@ -1,8 +1,9 @@
 import type { Feature, Milestone } from "../types";
-import { ScreenBuffer, TUI_PALETTE, truncateText, type CellStyle } from "./screen";
+import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, type CellStyle } from "./screen";
 import {
   drawPill,
   getStatusStyle,
+  renderFilteredEmpty,
   type FilteredData,
   type GraphCameraState,
   type GraphZoomLevel,
@@ -77,7 +78,16 @@ export interface WaterfallLayout {
   edges: GraphEdge[];
   ancestors: Map<string, Set<string>>;
   descendants: Map<string, Set<string>>;
+  /** Structure key (visible features and their dependencies); a change re-fits the camera. */
   layoutKey: string;
+  /** World-space cells per edge (index-aligned with `edges`). */
+  routes: RouteCell[][];
+}
+
+export interface WaterfallLayoutOptions {
+  /** Upper bound on node width (Fit shrinks overview nodes so wide layers fit). */
+  nodeWCap?: number;
+  colGap?: number;
 }
 
 const ZOOM_ORDER: GraphZoomLevel[] = ["overview", "compact", "full"];
@@ -88,15 +98,31 @@ export function stepGraphZoom(current: GraphZoomLevel, delta: number): GraphZoom
   return ZOOM_ORDER[next] ?? current;
 }
 
+/** Node width follows the title (plus chrome) up to the density's cap. */
+function nodeWidth(f: Feature, spec: WaterfallSpec, cap: number): number {
+  const titleW = textCellWidth(f.title);
+  if (spec.nodeH === 1) return Math.max(Math.min(8, cap), Math.min(cap, titleW + 4));
+  if (spec.nodeH === 3) return Math.max(Math.min(14, cap), Math.min(cap, titleW + 6));
+  return Math.max(Math.min(18, cap), Math.min(cap, titleW + 6));
+}
+
 /**
  * Computes a cycle-safe, top-to-bottom parent-barycenter waterfall layout at the chosen density.
+ *
+ * Every edge gets its own route: edges into one node arrive at distinct cells along its top,
+ * each horizontal jog gets a channel row in its gap (jogs share a row only when their spans do
+ * not overlap), and gaps grow with the number of channels they need. Skip-layer edges drop
+ * through a free lane between the nodes of the layers they pass.
  */
 export function computeWaterfallLayout(
   features: Feature[],
   milestones: Milestone[],
-  zoom: GraphZoomLevel
+  zoom: GraphZoomLevel,
+  opts: WaterfallLayoutOptions = {}
 ): WaterfallLayout {
   const spec = WATERFALL_SPECS[zoom];
+  const cap = Math.max(6, Math.min(spec.nodeW, opts.nodeWCap ?? spec.nodeW));
+  const colGap = opts.colGap ?? spec.colGap;
   const milestoneOrder = new Map(milestones.map((m) => [m.id, m.order]));
   const byId = new Map(features.map((f) => [f.id, f]));
   const visibleSet = new Set(byId.keys());
@@ -121,9 +147,7 @@ export function computeWaterfallLayout(
     return layer;
   }
 
-  for (const f of features) {
-    computeLayer(f.id, new Set());
-  }
+  for (const f of features) computeLayer(f.id, new Set());
 
   const rows = new Map<number, Feature[]>();
   let maxLayer = 0;
@@ -170,37 +194,25 @@ export function computeWaterfallLayout(
     list.forEach((f, idx) => colIndexMap.set(f.id, idx));
   }
 
+  const widths = new Map(features.map((f) => [f.id, nodeWidth(f, spec, cap)]));
+  const rowWidth = (list: Feature[]) =>
+    list.reduce((sum, f) => sum + widths.get(f.id)!, 0) + Math.max(0, list.length - 1) * colGap;
   let maxRowW = 0;
-  for (let layer = 0; layer <= maxLayer; layer++) {
-    const list = rows.get(layer) ?? [];
-    const rowW = list.length * spec.nodeW + Math.max(0, list.length - 1) * spec.colGap;
-    maxRowW = Math.max(maxRowW, rowW);
-  }
+  for (let layer = 0; layer <= maxLayer; layer++) maxRowW = Math.max(maxRowW, rowWidth(rows.get(layer) ?? []));
+  let stageW = Math.max(cap + spec.padX * 2, spec.padX * 2 + maxRowW);
 
-  const stageW = Math.max(spec.nodeW + spec.padX * 2, spec.padX * 2 + maxRowW);
-  const stageH = Math.max(
-    spec.nodeH + spec.padY * 2,
-    spec.padY * 2 + (maxLayer + 1) * spec.nodeH + maxLayer * spec.rowGap
-  );
-
+  // Horizontal placement (rows centred on the stage); vertical placement waits for the channels.
   const nodes = new Map<string, PlacedGraphNode>();
   const orderedNodes: PlacedGraphNode[] = [];
   for (let layer = 0; layer <= maxLayer; layer++) {
     const list = rows.get(layer) ?? [];
-    const rowW = list.length * spec.nodeW + Math.max(0, list.length - 1) * spec.colGap;
-    const startX = Math.floor((stageW - rowW) / 2);
-    list.forEach((f, idx) => {
-      const placed: PlacedGraphNode = {
-        feature: f,
-        x: startX + idx * (spec.nodeW + spec.colGap),
-        y: spec.padY + layer * (spec.nodeH + spec.rowGap),
-        w: spec.nodeW,
-        h: spec.nodeH,
-        layer,
-      };
+    let x = Math.floor((stageW - rowWidth(list)) / 2);
+    for (const f of list) {
+      const placed: PlacedGraphNode = { feature: f, x, y: 0, w: widths.get(f.id)!, h: spec.nodeH, layer };
       nodes.set(f.id, placed);
       orderedNodes.push(placed);
-    });
+      x += placed.w + colGap;
+    }
   }
 
   const edges: GraphEdge[] = [];
@@ -215,6 +227,129 @@ export function computeWaterfallLayout(
       }
     }
   }
+
+  // ---- anchors: departures at the parent's centre, arrivals spread along the child's top.
+  const center = (n: PlacedGraphNode) => n.x + Math.floor(n.w / 2);
+  const arrivalX = new Map<number, number>();
+  const incoming = new Map<string, number[]>();
+  edges.forEach((e, i) => {
+    const list = incoming.get(e.to) ?? [];
+    list.push(i);
+    incoming.set(e.to, list);
+  });
+  for (const [to, list] of incoming) {
+    const child = nodes.get(to)!;
+    list.sort((a, b) => center(nodes.get(edges[a]!.from)!) - center(nodes.get(edges[b]!.from)!));
+    const inner = Math.max(1, child.w - 2);
+    list.forEach((edgeIdx, i) => {
+      const x = list.length === 1 ? center(child) : child.x + 1 + Math.floor(((i + 1) * inner) / (list.length + 1));
+      arrivalX.set(edgeIdx, Math.min(child.x + child.w - 2, Math.max(child.x + 1, x)));
+    });
+  }
+
+  // ---- lanes for skip-layer edges and jogs per gap
+  type Jog = { edge: number; gap: number; left: number; right: number; row: number; which: 1 | 2 };
+  const jogs: Jog[] = [];
+  const lanes = new Map<number, number>();
+  const usedLanes: Array<{ x: number; from: number; to: number }> = [];
+  const nodeBlocks = (x: number, layerFrom: number, layerTo: number): boolean => {
+    for (const n of orderedNodes) {
+      if (n.layer < layerFrom || n.layer > layerTo) continue;
+      if (x >= n.x - 1 && x <= n.x + n.w) return true;
+    }
+    return false;
+  };
+  edges.forEach((e, i) => {
+    const p = nodes.get(e.from)!;
+    const c = nodes.get(e.to)!;
+    if (c.layer <= p.layer) return;
+    const px = center(p);
+    const ax = arrivalX.get(i)!;
+    if (c.layer === p.layer + 1) {
+      if (px !== ax) jogs.push({ edge: i, gap: p.layer, left: Math.min(px, ax), right: Math.max(px, ax), row: 0, which: 1 });
+      return;
+    }
+    const from = p.layer + 1;
+    const to = c.layer - 1;
+    const laneFree = (x: number) =>
+      x >= 0 && !nodeBlocks(x, from, to) && !usedLanes.some((u) => u.x === x && u.from <= to && u.to >= from);
+    let lane = -1;
+    for (let d = 0; d < stageW + 4 && lane < 0; d++) {
+      for (const cand of d === 0 ? [px] : [px + d, px - d]) {
+        if (laneFree(cand)) {
+          lane = cand;
+          break;
+        }
+      }
+    }
+    if (lane < 0) lane = stageW++;
+    if (lane >= stageW) stageW = lane + 2;
+    usedLanes.push({ x: lane, from, to });
+    lanes.set(i, lane);
+    if (lane !== px) jogs.push({ edge: i, gap: p.layer, left: Math.min(px, lane), right: Math.max(px, lane), row: 0, which: 1 });
+    if (lane !== ax) jogs.push({ edge: i, gap: c.layer - 1, left: Math.min(lane, ax), right: Math.max(lane, ax), row: 0, which: 2 });
+  });
+
+  // Interval packing: jogs share a channel row only when their spans are disjoint.
+  const channelsPerGap: number[] = new Array(Math.max(1, maxLayer)).fill(0);
+  for (let g = 0; g < maxLayer; g++) {
+    const gapJogs = jogs.filter((j) => j.gap === g).sort((a, b) => a.left - b.left || a.right - b.right);
+    const rowRight: number[] = [];
+    for (const j of gapJogs) {
+      let r = rowRight.findIndex((right) => right < j.left - 1);
+      if (r < 0) {
+        r = rowRight.length;
+        rowRight.push(j.right);
+      } else {
+        rowRight[r] = j.right;
+      }
+      j.row = r;
+    }
+    channelsPerGap[g] = rowRight.length;
+  }
+
+  // Vertical placement: each gap holds its channels plus the arrowhead row.
+  const layerY: number[] = [];
+  let y = spec.padY;
+  for (let layer = 0; layer <= maxLayer; layer++) {
+    layerY[layer] = y;
+    y += spec.nodeH + (layer < maxLayer ? Math.max(spec.rowGap, (channelsPerGap[layer] ?? 0) + 1) : 0);
+  }
+  for (const n of orderedNodes) n.y = layerY[n.layer]!;
+  const stageH = Math.max(spec.nodeH + spec.padY * 2, y + spec.padY);
+
+  const gapTop = (g: number) => layerY[g]! + spec.nodeH;
+  const routes: RouteCell[][] = edges.map((e, i) => {
+    const p = nodes.get(e.from)!;
+    const c = nodes.get(e.to)!;
+    if (c.layer <= p.layer) return EMPTY_ROUTE_CELLS;
+    const px = center(p);
+    const ax = arrivalX.get(i)!;
+    const y1 = p.y + p.h;
+    const arrowY = c.y - 1;
+    const pts: RoutePoint[] = [{ x: px, y: y1 }];
+    const jog1 = jogs.find((j) => j.edge === i && j.which === 1);
+    const jog2 = jogs.find((j) => j.edge === i && j.which === 2);
+    if (c.layer === p.layer + 1) {
+      if (jog1) {
+        const ch = gapTop(p.layer) + jog1.row;
+        pts.push({ x: px, y: ch }, { x: ax, y: ch });
+      }
+      pts.push({ x: ax, y: arrowY });
+    } else {
+      const lane = lanes.get(i)!;
+      if (jog1) {
+        const ch1 = gapTop(p.layer) + jog1.row;
+        pts.push({ x: px, y: ch1 }, { x: lane, y: ch1 });
+      }
+      if (jog2) {
+        const ch2 = gapTop(c.layer - 1) + jog2.row;
+        pts.push({ x: lane, y: ch2 }, { x: ax, y: ch2 });
+      }
+      pts.push({ x: ax, y: arrowY });
+    }
+    return rasterizeRoute(pts, false);
+  });
 
   const ancestors = new Map<string, Set<string>>();
   const descendants = new Map<string, Set<string>>();
@@ -236,7 +371,6 @@ export function computeWaterfallLayout(
       }
     }
   };
-
   for (const f of features) {
     const anc = new Set<string>();
     collectAncestors(f.id, anc);
@@ -256,6 +390,7 @@ export function computeWaterfallLayout(
     ancestors,
     descendants,
     layoutKey: features.map((f) => `${f.id}:${f.depends_on.join("+")}`).join(","),
+    routes,
   };
 }
 
@@ -289,6 +424,8 @@ export function resetGraphCamera(
   cam: GraphCameraState
 ): WaterfallLayout {
   cam.zoom = "full";
+  cam.nodeWCap = undefined;
+  cam.overflow = false;
   const layout = computeWaterfallLayout(features, milestones, "full");
   const innerW = Math.max(1, vpRect.w - 2);
   const innerH = Math.max(1, vpRect.h - 2);
@@ -298,6 +435,18 @@ export function resetGraphCamera(
   return layout;
 }
 
+/** Layout for the camera's current density (Fit's overview width cap included). */
+export function layoutForCamera(features: Feature[], milestones: Milestone[], cam: GraphCameraState): WaterfallLayout {
+  return cam.zoom === "overview" && cam.nodeWCap
+    ? computeWaterfallLayout(features, milestones, "overview", { nodeWCap: cam.nodeWCap, colGap: 1 })
+    : computeWaterfallLayout(features, milestones, cam.zoom);
+}
+
+/**
+ * Fits the graph: the densest-first density whose stage fits the viewport, then an overview whose
+ * nodes shrink until the widest layer fits. When nothing fits, `cam.overflow` is set: the view shows
+ * a cue and keyboard selection pans to every node.
+ */
 export function fitGraphCamera(
   features: Feature[],
   milestones: Milestone[],
@@ -306,18 +455,32 @@ export function fitGraphCamera(
 ): WaterfallLayout {
   const innerW = Math.max(1, vpRect.w - 2);
   const innerH = Math.max(1, vpRect.h - 2);
-  const candidateOrder: GraphZoomLevel[] = ["full", "compact", "overview"];
-  let chosen = computeWaterfallLayout(features, milestones, "overview");
-  for (const zoom of candidateOrder) {
+  const fits = (l: WaterfallLayout) => l.stageW <= innerW && l.stageH <= innerH;
+  let chosen: WaterfallLayout | null = null;
+  let chosenCap: number | undefined;
+  for (const zoom of ["full", "compact", "overview"] as GraphZoomLevel[]) {
     const layout = computeWaterfallLayout(features, milestones, zoom);
-    if (layout.stageW <= innerW && layout.stageH <= innerH) {
+    if (fits(layout)) {
       chosen = layout;
       break;
     }
   }
+  if (!chosen) {
+    // Shrink overview nodes until the widest layer fits the viewport width.
+    let best: WaterfallLayout | null = null;
+    for (let capW = WATERFALL_SPECS.overview.nodeW; capW >= 6; capW--) {
+      const layout = computeWaterfallLayout(features, milestones, "overview", { nodeWCap: capW, colGap: 1 });
+      best = layout;
+      chosenCap = capW;
+      if (layout.stageW <= innerW) break;
+    }
+    chosen = best!;
+  }
   cam.zoom = chosen.spec.zoom;
+  cam.nodeWCap = chosenCap;
+  cam.overflow = !fits(chosen);
   cam.tx = Math.floor((innerW - chosen.stageW) / 2);
-  cam.ty = Math.floor((innerH - chosen.stageH) / 2);
+  cam.ty = chosen.stageH <= innerH ? Math.floor((innerH - chosen.stageH) / 2) : 0;
   clampGraphCamera(chosen.stageW, chosen.stageH, vpRect, cam);
   return chosen;
 }
@@ -416,216 +579,6 @@ function rasterizeRoute(points: RoutePoint[], cornerAtStart: boolean): RouteCell
   return cells;
 }
 
-function columnCrossesNode(
-  node: PlacedGraphNode,
-  x: number,
-  yTop: number,
-  yBottom: number
-): boolean {
-  return x >= node.x && x < node.x + node.w && node.y <= yBottom && node.y + node.h - 1 >= yTop;
-}
-
-/**
- * True when the parent-center drop rows yTop..yBottom would run through an unrelated node box.
- */
-function dropBlockedByNodes(
-  layout: WaterfallLayout,
-  x: number,
-  yTop: number,
-  yBottom: number,
-  p1: PlacedGraphNode,
-  p2: PlacedGraphNode
-): boolean {
-  if (yBottom < yTop) return false;
-  for (const node of layout.nodes.values()) {
-    if (node === p1 || node === p2) continue;
-    if (columnCrossesNode(node, x, yTop, yBottom)) return true;
-  }
-  return false;
-}
-
-function routeCrossesNode(
-  layout: WaterfallLayout,
-  cells: RouteCell[],
-  p1: PlacedGraphNode,
-  p2: PlacedGraphNode
-): boolean {
-  for (const cell of cells) {
-    for (const node of layout.nodes.values()) {
-      if (node === p1 || node === p2) continue;
-      if (cell.x >= node.x && cell.x < node.x + node.w && cell.y >= node.y && cell.y < node.y + node.h) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-type PreparedDrop = {
-  index: number;
-  edge: GraphEdge;
-  p1: PlacedGraphNode;
-  p2: PlacedGraphNode;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  midY: number;
-  blocked: boolean;
-};
-
-/**
- * Points for an edge's pre-existing straight routing: vertical drop, or the classic
- * down-across-down dogleg through the gap row above the child.
- */
-function directRoutePoints(job: PreparedDrop, rowGap: number): RoutePoint[] {
-  if (job.x1 === job.x2) return [{ x: job.x1, y: job.y1 }, { x: job.x2, y: job.y2 }];
-  if (rowGap >= 2) {
-    return [
-      { x: job.x1, y: job.y1 },
-      { x: job.x1, y: job.midY },
-      { x: job.x2, y: job.midY },
-      { x: job.x2, y: job.y2 },
-    ];
-  }
-  return [{ x: job.x1, y: job.y1 }, { x: job.x1, y: job.y2 }, { x: job.x2, y: job.y2 }];
-}
-
-/**
- * Routes every edge in world coordinates so shapes hold under pan/zoom. Edges whose
- * parent-center drop would run through an unrelated node box are dodged through the nearest
- * free channel column, keeping skip-layer traces away from nodes they do not connect to and
- * from crossing other edges' routes; edges that fit keep their exact pre-existing path.
- */
-function routeGraphEdges(layout: WaterfallLayout): RouteCell[][] {
-  const rowGap = layout.spec.rowGap;
-  const routes: RouteCell[][] = new Array(layout.edges.length);
-  const prepared: PreparedDrop[] = [];
-
-  layout.edges.forEach((edge, index) => {
-    const p1 = layout.nodes.get(edge.from);
-    const p2 = layout.nodes.get(edge.to);
-    if (!p1 || !p2) {
-      routes[index] = EMPTY_ROUTE_CELLS;
-      return;
-    }
-    const x1 = p1.x + Math.floor(p1.w / 2);
-    const y1 = p1.y + p1.h;
-    const x2 = p2.x + Math.floor(p2.w / 2);
-    const y2 = p2.y - 1;
-    if (y2 < y1) {
-      routes[index] = EMPTY_ROUTE_CELLS;
-      return;
-    }
-    const midY = rowGap >= 2 ? y2 - 1 : y2;
-    const dropBottom = x1 !== x2 ? midY - 1 : y2 - 1;
-    prepared.push({
-      index,
-      edge,
-      p1,
-      p2,
-      x1,
-      y1,
-      x2,
-      y2,
-      midY,
-      blocked: dropBlockedByNodes(layout, x1, y1, dropBottom, p1, p2),
-    });
-  });
-
-  // Occupancy bookkeeping is only worth its cost on frames where some drop must dodge.
-  const anyBlocked = prepared.some((job) => job.blocked);
-  if (!anyBlocked) {
-    for (const job of prepared) {
-      routes[job.index] = rasterizeRoute(directRoutePoints(job, rowGap), false);
-    }
-    return routes;
-  }
-
-  const cellOwners = new Map<string, Set<string>>();
-  const claim = (edge: GraphEdge, cells: RouteCell[]): void => {
-    const key = `${edge.from}->${edge.to}`;
-    for (const cell of cells) {
-      const cellKey = `${cell.x},${cell.y}`;
-      const owners = cellOwners.get(cellKey);
-      if (owners) {
-        owners.add(key);
-      } else {
-        cellOwners.set(cellKey, new Set([key]));
-      }
-    }
-  };
-
-  // A dodge candidate may only share cells with edges that connect to the same endpoints;
-  // anything else would paint a foreign edge's run or arrowhead as part of this edge's trace.
-  const crossesForeignRoute = (edge: GraphEdge, cells: RouteCell[]): boolean => {
-    for (const cell of cells) {
-      const owners = cellOwners.get(`${cell.x},${cell.y}`);
-      if (!owners) continue;
-      for (const ownerKey of owners) {
-        const sep = ownerKey.indexOf("->");
-        const ownerFrom = ownerKey.slice(0, sep);
-        const ownerTo = ownerKey.slice(sep + 2);
-        if (
-          ownerFrom !== edge.from &&
-          ownerFrom !== edge.to &&
-          ownerTo !== edge.from &&
-          ownerTo !== edge.to
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-
-  for (const job of prepared) {
-    if (job.blocked) continue;
-    const cells = rasterizeRoute(directRoutePoints(job, rowGap), false);
-    routes[job.index] = cells;
-    claim(job.edge, cells);
-  }
-
-  for (const job of prepared) {
-    if (!job.blocked) continue;
-    const bent = job.x1 !== job.x2;
-    let cells: RouteCell[] | null = null;
-    // A bent edge with no gap row above the child has no room to dodge back into; keep it straight.
-    if (!bent || job.midY < job.y2) {
-      for (let d = 1; d < layout.stageW && !cells; d++) {
-        for (const channel of [job.x1 + d, job.x1 - d]) {
-          if (channel < 0 || channel >= layout.stageW) continue;
-          const points = bent
-            ? [
-                { x: job.x1, y: job.y1 },
-                { x: channel, y: job.y1 },
-                { x: channel, y: job.midY },
-                { x: job.x2, y: job.midY },
-                { x: job.x2, y: job.y2 },
-              ]
-            : [
-                { x: job.x1, y: job.y1 },
-                { x: channel, y: job.y1 },
-                { x: channel, y: job.y2 },
-                { x: job.x2, y: job.y2 },
-              ];
-          const candidate = rasterizeRoute(points, true);
-          if (!routeCrossesNode(layout, candidate, job.p1, job.p2) && !crossesForeignRoute(job.edge, candidate)) {
-            cells = candidate;
-            break;
-          }
-        }
-      }
-    }
-    if (!cells) cells = rasterizeRoute(directRoutePoints(job, rowGap), false);
-    routes[job.index] = cells;
-    claim(job.edge, cells);
-  }
-
-  return routes;
-}
-
-
 /**
  * Renders the top toolbar and full-height pannable waterfall DAG viewport.
  */
@@ -642,22 +595,22 @@ export function renderWaterfallGraphView(
       borderStyle: { fg: TUI_PALETTE.border },
       fillStyle: { bg: TUI_PALETTE.bg },
     });
-    buf.writeText(vpRect.x + 2, vpRect.y + 1, "No features match the active filter.", vpRect.w - 4, {
-      fg: TUI_PALETTE.muted,
-    });
+    const inner: Rect = { x: vpRect.x + 1, y: vpRect.y, w: vpRect.w - 2, h: vpRect.h };
+    if (state.payload.features.length === 0) {
+      buf.writeText(inner.x + 1, inner.y + 1, "No features yet.", inner.w - 2, { fg: TUI_PALETTE.text, bold: true });
+    } else {
+      renderFilteredEmpty(buf, inner, state, "features");
+    }
     return null;
   }
 
-  let layout = computeWaterfallLayout(
-    filtered.filteredFeatures,
-    state.payload.milestones,
-    state.graphCamera.zoom
-  );
+  let layout = layoutForCamera(filtered.filteredFeatures, state.payload.milestones, state.graphCamera);
 
+  // Fit on entry and whenever the visible set (filters) changes.
   if (!state.graphCamera.initialized || state.graphCamera.layoutKey !== layout.layoutKey) {
     state.graphCamera.initialized = true;
     state.graphCamera.layoutKey = layout.layoutKey;
-    layout = resetGraphCamera(filtered.filteredFeatures, state.payload.milestones, vpRect, state.graphCamera);
+    layout = fitGraphCamera(filtered.filteredFeatures, state.payload.milestones, vpRect, state.graphCamera);
   } else {
     clampGraphCamera(layout.stageW, layout.stageH, vpRect, state.graphCamera);
   }
@@ -787,7 +740,7 @@ export function renderWaterfallGraphView(
   const toScreenX = (wx: number) => innerRect.x + state.graphCamera.tx + wx;
   const toScreenY = (wy: number) => innerRect.y + state.graphCamera.ty + wy;
 
-  const routes = routeGraphEdges(layout);
+  const routes = layout.routes;
   for (let edgeIdx = 0; edgeIdx < layout.edges.length; edgeIdx++) {
     const edge = layout.edges[edgeIdx]!;
 
@@ -881,7 +834,7 @@ export function renderWaterfallGraphView(
 
     if (node.h === 1) {
       clipFill(sx, sy, node.w, 1, fillStyle);
-      const pillLabel = `${st.icon} ${f.id}`;
+      const pillLabel = `${st.icon} ${f.title}`;
       clipWrite(sx + 1, sy, pillLabel, node.w - 2, {
         fg: isSelected || isUp || isDown ? TUI_PALETTE.white : st.fg,
         bg: fillBg,
@@ -955,6 +908,26 @@ export function renderWaterfallGraphView(
         data: f.id,
       });
     }
+  }
+
+  // Overflow cue: some node lies outside the viewport (no density fits, or the user zoomed in).
+  let hidden = 0;
+  for (const node of layout.orderedNodes) {
+    const nx = toScreenX(node.x);
+    const ny = toScreenY(node.y);
+    if (nx < innerRect.x || ny < innerRect.y || nx + node.w > innerRect.x + innerRect.w || ny + node.h > innerRect.y + innerRect.h) {
+      hidden += 1;
+    }
+  }
+  if (hidden > 0) {
+    const cue = ` ▸ ${hidden} of ${layout.orderedNodes.length} off-screen · j/k reveal · drag/arrows pan `;
+    const cueW = Math.min(textCellWidth(cue), innerRect.w);
+    buf.writeText(innerRect.x + innerRect.w - cueW, innerRect.y + innerRect.h - 1, cue, cueW, {
+      fg: TUI_PALETTE.amber,
+      bg: TUI_PALETTE.surface2,
+      bold: true,
+    });
+    buf.addHitRegion({ id: "graph-overflow", kind: "graph-overflow", x: innerRect.x + innerRect.w - cueW, y: innerRect.y + innerRect.h - 1, w: cueW, h: 1, zIndex: 11 });
   }
 
   return layout;

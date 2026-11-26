@@ -1,7 +1,11 @@
 import type { Feature, FeatureStatus } from "../types";
 import { ScreenBuffer, TUI_PALETTE, glyphCellWidth, sanitizeTerminalText, segmentText, textCellWidth, truncateText, type CellStyle } from "./screen";
 import { HitLayer, drawPill, getStatusStyle, type Rect, type TuiState } from "./views";
-import { formatTimestamp, statusLabel, VIEW_LABELS } from "../present";
+import { formatCriteria, formatTimestamp, plural, statusLabel, VIEW_LABELS } from "../present";
+import { wrapCells } from "./screen";
+
+export const DRAWER_STATUSES: FeatureStatus[] = ["planned", "in-progress", "shipped", "paused", "cut"];
+export const SHIP_CHOICES = ["also", "anyway", "cancel"] as const;
 
 export interface DrawerRectInfo extends Rect {
   mode: "split" | "modal";
@@ -192,7 +196,7 @@ export function renderFeatureDrawer(
   totalH: number,
   topY: number,
   state: TuiState,
-  opts?: { revealNote?: boolean }
+  opts?: { revealNote?: boolean; revealKey?: string }
 ): { maxScrollY: number; rect: DrawerRectInfo } | null {
   if (!state.drawerFeatureId) return null;
   const feature: Feature | undefined = state.payload.features.find(
@@ -281,27 +285,55 @@ export function renderFeatureDrawer(
   const ops: Array<(w: DrawerClipWriter) => void> = [];
   let vy = 0;
 
-  if (state.drawerFeedback) {
-    const fb = state.drawerFeedback;
-    const fbY = vy;
+  const feedbackFor = (key: string) => (state.drawerFeedback && state.drawerFeedback.key === key ? state.drawerFeedback : null);
+  /** Paints control feedback on the rows just below a control; returns rows used. */
+  const controlRows = new Map<string, { y: number; h: number }>();
+  const pushFeedback = (key: string, atY: number): number => {
+    const fb = feedbackFor(key);
+    if (fb) controlRows.set(key, { y: atY, h: 0 });
+    if (!fb) return 0;
     const style =
       fb.kind === "err"
         ? { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft }
         : fb.kind === "ok"
         ? { fg: TUI_PALETTE.green, bg: TUI_PALETTE.greenSoft }
         : { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft };
+    const msg = fb.kind === "err" ? `${fb.message}  (x dismiss)` : fb.message;
+    const lines = wrapCells(msg, innerW - 2);
+    controlRows.set(key, { y: atY - 1, h: lines.length + 1 });
     ops.push((cw) => {
-      cw.fill(innerX, fbY, innerW, 1, style);
-      cw.write(innerX + 1, fbY, fb.message, innerW - 2, { ...style, bold: true });
+      cw.fill(innerX, atY, innerW, lines.length, style);
+      lines.forEach((ln, i) => cw.write(innerX + 1, atY + i, ln, innerW - 2, { ...style, bold: true }));
+      if (fb.kind === "err") cw.hit(innerX, atY, innerW, lines.length, "drawer-dismiss", "drawer-dismiss");
     });
-    vy += 2;
+    return lines.length;
+  };
+
+  const check = state.payload.check;
+  const frozen = check.editable === false;
+  if (frozen) {
+    const n = (check.blocking ?? check.errors).length;
+    const lines = wrapCells(`Editing paused — ${plural(n, "error")}. The roadmap has errors that block every save; fix them, then R to recheck. Press e for Health.`, innerW - 2);
+    const fy = vy;
+    ops.push((cw) => {
+      cw.fill(innerX, fy, innerW, lines.length, { bg: TUI_PALETTE.redSoft });
+      lines.forEach((ln, i) => cw.write(innerX + 1, fy + i, ln, innerW - 2, { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft, bold: i === 0 }));
+      cw.hit(innerX, fy, innerW, lines.length, "drawer-freeze", "drawer-freeze");
+    });
+    vy += lines.length;
+    vy += pushFeedback("freeze", vy);
+    vy += 1;
+  } else if (check.stale) {
+    const lines = wrapCells("ROADMAP.md is out of sync — run pp render (or save any change here).", innerW - 2);
+    const sy0 = vy;
+    ops.push((cw) => {
+      cw.fill(innerX, sy0, innerW, lines.length, { bg: TUI_PALETTE.amberSoft });
+      lines.forEach((ln, i) => cw.write(innerX + 1, sy0 + i, ln, innerW - 2, { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft }));
+    });
+    vy += lines.length + 1;
   }
 
-  // Status selector row(s)
-  const statuses: FeatureStatus[] = ["planned", "in-progress", "shipped", "paused", "cut"];
-  ops.push((cw) => {
-    cw.write(innerX, 0, "", 0);
-  });
+  // Status selector row(s): pills, focusable with Tab and ←/→ (Enter applies).
   const statusStart = vy;
   ops.push((cw) => {
     cw.write(innerX, statusStart, "STATUS", innerW, { fg: TUI_PALETTE.muted, bold: true });
@@ -310,9 +342,10 @@ export function renderFeatureDrawer(
 
   let sx = innerX;
   let sy = vy;
-  for (const s of statuses) {
+  DRAWER_STATUSES.forEach((s, idx) => {
     const active = feature.status === s;
     const st = getStatusStyle(s);
+    const focused = state.drawerFocus === "status" && state.drawerStatusIndex === idx && !state.pendingShip;
     const label = active ? `${st.icon} ${statusLabel(s)}` : statusLabel(s);
     // Measure in terminal cells (multi-cell icons) so pills cannot overlap.
     const pillW = textCellWidth(` ${label} `);
@@ -327,15 +360,52 @@ export function renderFeatureDrawer(
         px,
         py,
         label,
-        active
+        focused
+          ? { fg: TUI_PALETTE.bg, bg: TUI_PALETTE.accent, bold: true }
+          : active
           ? { fg: st.fg, bg: st.bg, bold: true }
-          : { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface2 },
+          : { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface2, dim: frozen },
         { id: `drawer-status-${s}`, kind: "drawer-status", data: s }
       );
     });
     sx += pillW + 1;
+  });
+  vy = sy + 1;
+
+  // Ship confirm (soft invariant): shipped with open criteria asks first.
+  if (state.pendingShip && state.pendingShip.featureId === feature.id) {
+    const open = feature.ship_criteria.filter((c) => !c.done).length;
+    const msgLines = wrapCells(`${plural(open, "criterion", "criteria")} still open. Shipped usually means every criterion is done.`, innerW - 2);
+    const cy0 = vy;
+    const labels = [`Also mark ${open} ${open === 1 ? "criterion" : "criteria"} done`, "Ship anyway", "Cancel"];
+    ops.push((cw) => {
+      cw.fill(innerX, cy0, innerW, msgLines.length + 2, { bg: TUI_PALETTE.amberSoft });
+      msgLines.forEach((ln, i) => cw.write(innerX + 1, cy0 + i, ln, innerW - 2, { fg: TUI_PALETTE.amber, bg: TUI_PALETTE.amberSoft, bold: true }));
+    });
+    let bx = innerX + 1;
+    let by = cy0 + msgLines.length;
+    labels.forEach((lbl, i) => {
+      const w = textCellWidth(` ${lbl} `);
+      if (bx > innerX + 1 && bx + w > innerX + innerW) {
+        bx = innerX + 1;
+        by += 1;
+      }
+      const px = bx;
+      const py = by;
+      const focused = state.pendingShip!.choice === i;
+      ops.push((cw) => {
+        cw.pill(px, py, lbl, focused ? { fg: TUI_PALETTE.bg, bg: TUI_PALETTE.accent, bold: true } : { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 }, {
+          id: `ship-${SHIP_CHOICES[i]}`,
+          kind: "drawer-ship-choice",
+          data: i,
+        });
+      });
+      bx += w + 1;
+    });
+    vy = by + 2;
   }
-  vy = sy + 2;
+  vy += pushFeedback("status", vy);
+  vy += 1;
 
   // Overview
   if (feature.description) {
@@ -382,6 +452,41 @@ export function renderFeatureDrawer(
     vy = dy + 2;
   }
 
+  // Unblocks: direct dependents, jumping to each.
+  const dependents = state.payload.features.filter((f) => f.depends_on.includes(feature.id));
+  {
+    const titleY = vy;
+    ops.push((cw) => cw.write(innerX, titleY, "UNBLOCKS", innerW, { fg: TUI_PALETTE.muted, bold: true }));
+    vy += 1;
+    if (dependents.length === 0) {
+      const ey = vy;
+      ops.push((cw) => cw.write(innerX, ey, "Nothing depends on this yet.", innerW, { fg: TUI_PALETTE.muted }));
+      vy += 2;
+    } else {
+      let dx = innerX;
+      let dy = vy;
+      for (const dep of dependents) {
+        const chipLabel = `← ${dep.id}`;
+        const chipW = textCellWidth(chipLabel) + 2;
+        if (dx > innerX && dx + chipW > innerX + innerW) {
+          dx = innerX;
+          dy += 1;
+        }
+        const cx = dx;
+        const cy = dy;
+        ops.push((cw) => {
+          cw.pill(cx, cy, chipLabel, { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.accentSoft, bold: true }, {
+            id: `drawer-unblocks-${dep.id}`,
+            kind: "drawer-jump",
+            data: dep.id,
+          });
+        });
+        dx += chipW + 1;
+      }
+      vy = dy + 2;
+    }
+  }
+
   // External Refs + Beads status
   if (feature.refs.length > 0) {
     const refTitleY = vy;
@@ -417,7 +522,7 @@ export function renderFeatureDrawer(
     cw.write(
       innerX,
       critTitleY,
-      `SHIP CRITERIA (${doneCount}/${feature.ship_criteria.length})`,
+      `SHIP CRITERIA · ${formatCriteria(doneCount, feature.ship_criteria.length)}`,
       innerW,
       { fg: TUI_PALETTE.muted, bold: true }
     );
@@ -456,7 +561,9 @@ export function renderFeatureDrawer(
           index: idx,
         });
       });
-      vy += rowH + 1;
+      vy += rowH;
+      vy += pushFeedback(`crit:${c.id}`, vy);
+      vy += 1;
     });
   }
 
@@ -468,7 +575,7 @@ export function renderFeatureDrawer(
   const btnW = 5; // " Log "
   const boxW = Math.max(12, innerW - btnW - 1);
   ops.push((cw) => {
-    cw.write(innerX, noteHeaderY, "ADD PULSE NOTE (press n to type, Enter to log)", innerW, {
+    cw.write(innerX, noteHeaderY, "ADD A NOTE (n to type, Enter to log)", innerW, {
       fg: TUI_PALETTE.muted,
       bold: true,
     });
@@ -522,7 +629,9 @@ export function renderFeatureDrawer(
       { id: "drawer-note-submit", kind: "drawer-note-submit" }
     );
   });
-  vy += 3;
+  vy += 2;
+  vy += pushFeedback("note", vy);
+  vy += 1;
 
   // Pulse Updates reverse-chronological
   const updatesTitleY = vy;
@@ -561,64 +670,75 @@ export function renderFeatureDrawer(
       state.drawerScrollY = Math.max(0, Math.min(maxScrollY, noteRowY - bodyRect.h + 1));
     }
   }
+  // One-shot: keep the control that just changed (and its feedback) on screen with a minimal scroll.
+  if (opts?.revealKey && bodyRect.h > 0) {
+    const target = controlRows.get(opts.revealKey);
+    if (target) {
+      if (target.y < state.drawerScrollY) state.drawerScrollY = target.y;
+      else if (target.y + target.h > state.drawerScrollY + bodyRect.h) state.drawerScrollY = target.y + target.h - bodyRect.h;
+    }
+  }
   state.drawerScrollY = Math.max(0, Math.min(state.drawerScrollY, maxScrollY));
   const cw = new DrawerClipWriter(buf, bodyRect, state.drawerScrollY, HitLayer.drawerControl);
   for (const op of ops) op(cw);
 
+  // Scroll cue on the frame whenever the body overflows.
+  if (maxScrollY > 0 && rect.h > 2) {
+    const below = maxScrollY - state.drawerScrollY;
+    const cue = below > 0 ? ` ▼ ${below} more · PgDn ` : " ▲ top · PgUp ";
+    const cueW = textCellWidth(cue);
+    buf.writeText(rect.x + rect.w - 2 - cueW, rect.y + rect.h - 1, cue, cueW, { fg: TUI_PALETTE.accent, bg: TUI_PALETTE.surface, bold: true });
+  }
+
   return { maxScrollY, rect };
 }
 
-export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: number): void {
-  buf.addHitRegion({
-    id: "help-backdrop",
-    kind: "help-backdrop",
-    x: 0,
-    y: 0,
-    w: width,
-    h: height,
-    zIndex: HitLayer.helpBackdrop,
-  });
+export const HELP_LINES: Array<[string, string]> = [
+  ["1 / 2 / 3", `Views: ${VIEW_LABELS.roadmap}, ${VIEW_LABELS.graph}, ${VIEW_LABELS.activity}`],
+  ["j / k  Enter", "Move the selection; open the feature"],
+  ["/", "Search titles, ids and descriptions"],
+  ["s / a / M", "Filter by status, area or milestone"],
+  ["c", "Clear every filter"],
+  ["w", "Activity: 7-day or 30-day window"],
+  ["+ - 0 f", "Graph: zoom out/in, actual size, fit"],
+  ["← → / drag", "Graph: pan"],
+  ["h", "Graph: hover tracing on or off"],
+  ["Tab ←→ Space", "Drawer: status pills, choose, toggle criterion"],
+  ["n  x  e", "Drawer: note, dismiss an error, open Health"],
+  ["PgUp / PgDn", "Scroll the drawer, list or Health"],
+  ["m / y", "Mouse capture on or off; copy the feature id"],
+  ["R", "Reload from disk and recheck"],
+  ["? / q", "Toggle this help / quit and restore the terminal"],
+];
 
-  const w = Math.min(width - 4, 78);
-  const h = Math.min(height - 4, 21);
+export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: number): void {
+  buf.addHitRegion({ id: "help-backdrop", kind: "help-backdrop", x: 0, y: 0, w: width, h: height, zIndex: HitLayer.helpBackdrop });
+
+  const w = Math.max(24, Math.min(width - 4, 92));
+  const gutter = Math.min(Math.max(...HELP_LINES.map(([k]) => textCellWidth(k))) + 2, Math.floor(w / 3));
+  const descW = Math.max(10, w - 4 - gutter);
+  const rows: Array<{ key: string; text: string }> = [];
+  for (const [k, desc] of HELP_LINES) {
+    wrapCells(desc, descW).forEach((line, i) => rows.push({ key: i === 0 ? k : "", text: line }));
+  }
+  const h = Math.max(6, Math.min(height - 2, rows.length + 4));
   const x = Math.max(1, Math.floor((width - w) / 2));
   const y = Math.max(1, Math.floor((height - h) / 2));
-
   buf.drawBox(x, y, w, h, {
     borderStyle: { fg: TUI_PALETTE.accent },
     fillStyle: { bg: TUI_PALETTE.surface },
-    title: "Project Pulse TUI — Controls & SSH Tips",
+    title: "Keys",
     titleStyle: { fg: TUI_PALETTE.accent, bold: true },
   });
-
-  drawPill(
-    buf,
-    x + w - 10,
-    y + 1,
-    "Close",
-    { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 },
-    { id: "help-close", kind: "help-close", zIndex: HitLayer.helpControl }
-  );
-
-  const lines: Array<[string, string]> = [
-    ["1 / 2 / 3", `Switch ${VIEW_LABELS.roadmap}, ${VIEW_LABELS.graph}, Board`],
-    ["/ Search", "Filter features by title, ID, or description"],
-    ["Click pills", "Open Milestone / Status / Area dropdown filters & Reset"],
-    ["j / k / Wheel", "Select features or scroll active view / drawer"],
-    ["Enter", "Open Feature Detail Drawer (split >= 120 cols, modal < 120)"],
-    ["Graph Pan/Zoom", "Drag canvas to pan · Wheel / + / - zoom · 0 reset · F fit"],
-    ["Graph Click", "Hover ON by default: move traces, click opens · h toggles"],
-    ["Drawer Actions", "Click status pills · Space toggles criterion · n logs note"],
-    ["m (Mouse)", "Toggle SGR mouse off for native SSH/tmux drag-selection"],
-    ["y (Copy ID)", "Copy active feature ID to host clipboard via OSC 52"],
-    ["R / ? / q", "Manual refresh / toggle Help / quit & restore terminal"],
-  ];
-
-  let ry = y + 3;
-  for (const [k, desc] of lines) {
-    if (ry >= y + h - 1) break;
-    buf.writeText(x + 3, ry, truncateText(k, 16), 16, { fg: TUI_PALETTE.accent, bold: true });
-    buf.writeText(x + 20, ry, desc, w - 23, { fg: TUI_PALETTE.text });
-    ry += 1;
+  drawPill(buf, x + w - 9, y + 1, "Close", { fg: TUI_PALETTE.text, bg: TUI_PALETTE.surface2 }, { id: "help-close", kind: "help-close", zIndex: HitLayer.helpControl });
+  const visible = h - 4;
+  for (let i = 0; i < Math.min(visible, rows.length); i++) {
+    const r = rows[i]!;
+    if (r.key) buf.writeText(x + 2, y + 2 + i, r.key, gutter - 1, { fg: TUI_PALETTE.accent, bold: true });
+    buf.writeText(x + 2 + gutter, y + 2 + i, r.text, descW, { fg: TUI_PALETTE.text });
+  }
+  if (rows.length > visible) {
+    const hint = ` ▼ ${rows.length - visible} more lines — widen the terminal `;
+    buf.writeText(x + w - 2 - textCellWidth(hint), y + h - 1, hint, textCellWidth(hint), { fg: TUI_PALETTE.muted, bg: TUI_PALETTE.surface });
   }
 }

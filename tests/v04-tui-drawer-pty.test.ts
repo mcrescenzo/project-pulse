@@ -110,7 +110,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
 
     try {
       // Open drawer in wide terminal -> split-pane mode keeping cards visible on left
-      session.click(ctrl, "card-tui-drawer");
+      session.click(ctrl, "row-tui-drawer");
       expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
       const panelHit = ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-panel")!;
       expect(panelHit.x).toBeGreaterThanOrEqual(70);
@@ -121,9 +121,14 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
       expect(svc.load().features.find((f) => f.id === "tui-drawer")?.ship_criteria[0]?.done).toBe(true);
       expect(readFileSync(join(tempDir, "ROADMAP.md"), "utf8")).toContain("- [x] Toggle criteria");
 
-      // Click status pill "shipped" -> updates status on disk
+      // Click status pill "shipped" with an open criterion -> confirm first, then "Also mark 1 done"
       session.click(ctrl, "drawer-status-shipped");
-      expect(svc.load().features.find((f) => f.id === "tui-drawer")?.status).toBe("shipped");
+      expect(svc.load().features.find((f) => f.id === "tui-drawer")?.status).toBe("in-progress");
+      expect(ctrl.getState().pendingShip?.featureId).toBe("tui-drawer");
+      session.click(ctrl, "ship-also");
+      const shippedNow = svc.load().features.find((f) => f.id === "tui-drawer")!;
+      expect(shippedNow.status).toBe("shipped");
+      expect(shippedNow.ship_criteria.every((c) => c.done)).toBe(true);
 
       // Type and submit inline pulse note (including 'q' and 'n' characters)
       ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
@@ -145,7 +150,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
 
       // ? opens Help overlay cleanly
       ctrl.handleEvent({ type: "key", key: "?", raw: "?" });
-      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("Controls & SSH Tips");
+      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("Toggle this help / quit and restore the terminal");
       ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
       expect(ctrl.getState().helpOpen).toBe(false);
 
@@ -196,7 +201,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
       expect(ctrl.getState().beadsLoading).toBe(false);
 
       // Open drawer, confirm hydrated Beads ref displays cleanly, type draft note, and trigger external fs.watch write
-      session.click(ctrl, "card-tui-drawer");
+      session.click(ctrl, "row-tui-drawer");
       expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("bd:pp-99 — in progress: Hydrated Bead");
 
       ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
@@ -272,7 +277,7 @@ sys.exit(rc)
     ctrl.start();
 
     try {
-      session.click(ctrl, "card-tui-drawer");
+      session.click(ctrl, "row-tui-drawer");
       expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
       const roadmapBefore = readFileSync(join(tempDir, "ROADMAP.md"), "utf8");
 
@@ -320,7 +325,7 @@ sys.exit(rc)
     ctrl.start();
 
     try {
-      session.click(ctrl, "card-tui-drawer");
+      session.click(ctrl, "row-tui-drawer");
       expect(ctrl.getState().drawerFeatureId).toBe("tui-drawer");
 
       // Status filter dropdown opens above the split drawer
@@ -465,10 +470,12 @@ sys.exit(rc)
       expect(ctrl.getState().drawerScrollY).toBeGreaterThan(0);
 
       // Escape returns to criteria (keys route to the note editor while it is
-      // focused); Tab re-enters the note and keeps it revealed.
+      // focused); Tab moves to the status pills; n re-enters the note and keeps it revealed.
       ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
       expect(ctrl.getState().drawerFocus).toBe("criteria");
       ctrl.handleEvent({ type: "key", key: "tab", raw: "\t" });
+      expect(ctrl.getState().drawerFocus).toBe("status");
+      ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
       expect(ctrl.getState().drawerFocus).toBe("note");
       expect(
         ctrl.getBuffer().getHitRegions().find((r) => r.id === "drawer-note-input")
@@ -529,7 +536,7 @@ sys.exit(rc)
     }
   });
 
-  test("long card area labels truncate inside their card instead of painting into neighbors", () => {
+  test("a long area label truncates inside its ledger column and never truncates the feature id", () => {
     const svc = seedProject(tempDir);
     svc.addFeature({
       id: "area-overflow-card",
@@ -538,39 +545,26 @@ sys.exit(rc)
       status: "planned",
       area: "Platform Infrastructure and Developer Experience Group",
     });
-    const ctrl = new TuiController({
-      rootDir: tempDir,
-      noBeads: true,
-      session: new VirtualDrawerSession(140, 42),
-    });
-    ctrl.start();
-
-    try {
-      const card = ctrl
-        .getBuffer()
-        .getHitRegions()
-        .find((r) => r.id === "card-area-overflow-card")!;
-      expect(card).toBeDefined();
-
-      const row = ctrl.getBuffer().toPlainLines()[card.y + 2]!;
-      // Interior slice: skip the left border plus padding and the right border.
-      const inside = row.slice(card.x + 2, card.x + card.w - 2);
-      // ID keeps its reserved cells on the left; 4 cells hold a truncated
-      // prefix plus the ellipsis ("are…"), never spilling into the label.
-      expect(inside.startsWith("are…")).toBe(true);
-      // The area label is ellipsis-truncated within the card rectangle.
-      expect(inside).toContain("…");
-      expect(row).not.toContain("Experience Group");
-
-      // Nothing bleeds through the gap into the neighboring card.
-      expect(row.slice(card.x + card.w, card.x + card.w + 2)).toMatch(/^[\s│]*$/);
-
-      // The whole card stays the click target where the truncated label sits.
-      expect(ctrl.getBuffer().hitTest(card.x + card.w - 3, card.y + 2)?.id).toBe(
-        "card-area-overflow-card"
-      );
-    } finally {
-      ctrl.stop();
+    for (const width of [120, 180]) {
+      const ctrl = new TuiController({
+        rootDir: tempDir,
+        noBeads: true,
+        session: new VirtualDrawerSession(width, 42),
+      });
+      ctrl.start();
+      try {
+        const rowHit = ctrl.getBuffer().getHitRegions().find((r) => r.id === "row-area-overflow-card")!;
+        expect(rowHit).toBeDefined();
+        const row = ctrl.getBuffer().toPlainLines()[rowHit.y]!;
+        expect(row).toContain("area-overflow-card");
+        expect(row).toContain("Platform");
+        expect(row).toContain("…");
+        expect(row).not.toContain("Experience Group");
+        // The whole row stays the click target.
+        expect(ctrl.getBuffer().hitTest(rowHit.x + rowHit.w - 3, rowHit.y)?.id).toBe("row-area-overflow-card");
+      } finally {
+        ctrl.stop();
+      }
     }
   });
 });

@@ -49,7 +49,7 @@ class VirtualCoreSession implements TerminalSession {
   }
 
   clickCard(controller: TuiController, featureId: string): void {
-    const region = controller.getBuffer().getHitRegions().find((r) => r.id === `card-${featureId}`);
+    const region = controller.getBuffer().getHitRegions().find((r) => r.id === `row-${featureId}`);
     if (!region) throw new Error(`card hit region for ${featureId} not found`);
     controller.handleEvent({ type: "mouse", action: "down", button: "left", x: region.x, y: region.y });
   }

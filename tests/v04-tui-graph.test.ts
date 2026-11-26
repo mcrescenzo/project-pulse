@@ -98,12 +98,14 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
       const vp = regions.find((r) => r.id === "graph-viewport")!;
       expect(vp.h).toBeGreaterThanOrEqual(33);
 
-      // Step down Full -> Compact -> Overview via zoom out button
+      // The graph fits on open: nine layers only fit at the overview density.
+      expect(ctrl.getState().graphCamera.zoom).toBe("overview");
+      session.clickDown(ctrl, "graph-zoom-in");
+      expect(ctrl.getState().graphCamera.zoom).toBe("compact");
+      session.clickDown(ctrl, "graph-zoom-in");
       expect(ctrl.getState().graphCamera.zoom).toBe("full");
       session.clickDown(ctrl, "graph-zoom-out");
       expect(ctrl.getState().graphCamera.zoom).toBe("compact");
-      session.clickDown(ctrl, "graph-zoom-out");
-      expect(ctrl.getState().graphCamera.zoom).toBe("overview");
 
       // Reset restores full
       session.clickDown(ctrl, "graph-zoom-reset");
@@ -256,6 +258,15 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
     }
   }
 
+  /** The highlighted arrowhead into a node (arrivals are spread along its top edge). */
+  function amberArrowInto(buf: GraphBuffer, reg: NodeRegion): { x: number; y: number } {
+    for (let x = reg.x; x < reg.x + reg.w; x++) {
+      const cell = buf.getCell(x, reg.y - 1);
+      if (cell?.ch === "▼" && isHighlightedEdgeCell(buf, x, reg.y - 1, TUI_PALETTE.amber)) return { x, y: reg.y - 1 };
+    }
+    throw new Error("no highlighted arrowhead into the node");
+  }
+
   /** Asserts no highlighted edge glyph in the row band from one row above the box through it. */
   function assertNoHighlightInNodeBand(buf: GraphBuffer, reg: NodeRegion): void {
     const offenders: string[] = [];
@@ -267,12 +278,18 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
     expect(offenders).toEqual([]);
   }
 
-  /** Asserts the node's incoming arrowhead is a plain dim border arrow (not illuminated). */
+  /** Asserts every incoming arrowhead of the node is a plain dim border arrow (not illuminated). */
   function assertDimIncomingArrow(buf: GraphBuffer, reg: NodeRegion): void {
-    const cell = buf.getCell(reg.x + Math.floor(reg.w / 2), reg.y - 1);
-    expect(cell?.ch).toBe("▼");
-    expect(cell?.fg).toEqual(TUI_PALETTE.border);
-    expect(cell?.dim).toBe(true);
+    const arrows: EdgeCellSnapshot[] = [];
+    for (let x = reg.x; x < reg.x + reg.w; x++) {
+      const cell = buf.getCell(x, reg.y - 1);
+      if (cell?.ch === "▼") arrows.push(cell);
+    }
+    expect(arrows.length).toBeGreaterThan(0);
+    for (const cell of arrows) {
+      expect(cell.fg).toEqual(TUI_PALETTE.border);
+      expect(cell.dim).toBe(true);
+    }
   }
 
   test("routes blocked skip-layer A→Z trace around unrelated X without crossing it or highlighting B→X", () => {
@@ -316,11 +333,7 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
         const regZ = regions.find((r) => r.id === "graph-node-feat-z")!;
 
         // The highlighted A→Z trace is continuously visible from A's drop cell to Z's arrowhead.
-        assertAmberTraceConnected(
-          buf,
-          { x: regA.x + Math.floor(regA.w / 2), y: regA.y + regA.h },
-          { x: regZ.x + Math.floor(regZ.w / 2), y: regZ.y - 1 }
-        );
+        assertAmberTraceConnected(buf, { x: regA.x + Math.floor(regA.w / 2), y: regA.y + regA.h }, amberArrowInto(buf, regZ));
 
         // The trace never traverses the unrelated X box (entry row through its bottom row).
         assertNoHighlightInNodeBand(buf, regX);
@@ -384,23 +397,26 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
       expect(regZ.x).toBe(regB.x);
 
       const cCx = regC.x + Math.floor(regC.w / 2);
-      const zCx = regZ.x + Math.floor(regZ.w / 2);
       const dropTop = regC.y + regC.h;
       const arrowRow = regZ.y - 1;
-      const midRow = arrowRow - 1;
 
-      // Unchanged straight routing: drop down C's center, turn once, run to Z's arrowhead.
-      for (let y = dropTop; y < midRow; y++) {
-        expect(buf.getCell(cCx, y)?.ch).toBe("│");
-      }
-      expect(buf.getCell(cCx, midRow)?.ch).toBe("╯");
-      expect(buf.getCell(cCx - 10, midRow)?.ch).toBe("─");
-      expect(buf.getCell(zCx, arrowRow)?.ch).toBe("▼");
+      // Straight routing: drop down C's own column (clear of Y's box), turn once in the gap above
+      // Z, and run to one of Z's arrowheads.
+      let y = dropTop;
+      while (y < arrowRow && ["│", "┼"].includes(buf.getCell(cCx, y)?.ch ?? "")) y++;
+      expect(y).toBeGreaterThan(regY.y + regY.h - 1);
+      expect(["╯", "╰"]).toContain(buf.getCell(cCx, y)?.ch ?? "");
+      expect(y).toBeLessThan(arrowRow);
+      // C's drop column never enters Y's box.
+      expect(cCx < regY.x || cCx >= regY.x + regY.w).toBe(true);
+      const zArrows = [...Array(regZ.w).keys()].filter((i) => buf.getCell(regZ.x + i, arrowRow)?.ch === "▼");
+      expect(zArrows.length).toBe(2);
 
-      // Adjacent-layer A→Y keeps its plain arrowhead into Y.
+      // Adjacent-layer A→Y keeps its single arrowhead into Y's centre (A is selected on entry,
+      // so the edge is drawn as a traced downstream edge).
       const yArrow = buf.getCell(regY.x + Math.floor(regY.w / 2), regY.y - 1);
       expect(yArrow?.ch).toBe("▼");
-      expect(yArrow?.fg).toEqual(TUI_PALETTE.border);
+      expect(ctrl.getState().graphSelectedId).toBe("feat-a");
     } finally {
       ctrl.stop();
     }
@@ -462,11 +478,7 @@ describe("v0.4 TUI Waterfall Dependency Graph", () => {
       const regZ = regions.find((r) => r.id === "graph-node-feat-z")!;
 
       // The highlighted A→Z trace reaches Z's arrowhead continuously despite the dodge.
-      assertAmberTraceConnected(
-        buf,
-        { x: regA.x + Math.floor(regA.w / 2), y: regA.y + regA.h },
-        { x: regZ.x + Math.floor(regZ.w / 2), y: regZ.y - 1 }
-      );
+      assertAmberTraceConnected(buf, { x: regA.x + Math.floor(regA.w / 2), y: regA.y + regA.h }, amberArrowInto(buf, regZ));
 
       // The highlight never traverses the unrelated X and V boxes.
       assertNoHighlightInNodeBand(buf, regX);

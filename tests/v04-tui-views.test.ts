@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RoadmapService } from "../src/store";
 import { TuiController } from "../src/tui/app";
+import { layoutForCamera } from "../src/tui/graph";
 import type { InputEvent, TerminalSession } from "../src/tui/input";
 import type { ColorMode } from "../src/tui/screen";
 
@@ -130,7 +131,7 @@ function seedRoadmap(dir: string): RoadmapService {
 }
 
 describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
-  test("renders header/KPIs, hides empty milestones on status/search filter, and resets cleanly", () => {
+  test("renders header and distribution, hides empty milestones on status/search filter, and resets cleanly", () => {
     seedRoadmap(tempDir);
     const session = new VirtualSession(140, 40);
     const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
@@ -153,7 +154,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(screen).not.toContain("v0.1 Core");
       expect(screen).toContain("v0.2 Next");
       expect(screen).toContain("Docs Polish");
-      expect(screen).toContain("1/2");
+      expect(screen).toContain("0/2 shipped");
 
       // Click Reset restores both milestones
       session.clickRegion(ctrl, "filter-reset");
@@ -161,13 +162,13 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(screen).toContain("v0.1 Core");
       expect(screen).toContain("v0.2 Next");
 
-      // Click KPI card "PLANNED" filters to planned (hiding shipped v0.1 Core), and clicking again toggles off
-      session.clickRegion(ctrl, "kpi-planned");
+      // Clicking the "planned" count filters to planned (hiding shipped v0.1 Core); clicking again toggles off
+      session.clickRegion(ctrl, "dist-planned");
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).not.toContain("v0.1 Core");
       expect(screen).toContain("v0.2 Next");
 
-      session.clickRegion(ctrl, "kpi-planned");
+      session.clickRegion(ctrl, "dist-planned");
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("v0.1 Core");
       expect(screen).toContain("v0.2 Next");
@@ -188,34 +189,35 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     }
   });
 
-  test("switches to Status Board preserving active filters and handles narrow column tabs + scrolling", () => {
-    seedRoadmap(tempDir);
+  test("Activity replaces the Status Board: no-git notes, window key, and filters", () => {
+    const svc = seedRoadmap(tempDir);
+    svc.logFeaturePulse({ id: "remote-tui", note: "Mouse support landed." });
     const session = new VirtualSession(140, 40);
     const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
     ctrl.start();
 
     try {
-      session.clickRegion(ctrl, "tab-board");
+      session.clickRegion(ctrl, "tab-activity");
+      expect(ctrl.getState().viewMode).toBe("activity");
       let screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("planned");
-      expect(screen).toContain("in progress");
-      expect(screen).toContain("shipped");
-      expect(screen).toContain("Docs Polish");
-      expect(screen).toContain("Core Store Engine");
+      expect(screen).toContain("Changes in the last 7 days");
+      expect(screen).toContain("Status and criteria changes need git history; showing notes.");
+      expect(screen).toContain("Mouse support landed.");
+      expect(ctrl.getBuffer().getHitRegions().some((r) => r.kind === "board-col" || r.kind === "board-tab")).toBe(false);
 
-      // Wheel scroll updates cards/board without throwing
-      ctrl.handleEvent({ type: "mouse", action: "wheel-down", button: "none", x: 10, y: 12 });
-      expect(ctrl.getState().boardScrollY.planned).toBeGreaterThanOrEqual(0);
+      ctrl.handleEvent({ type: "key", key: "w", raw: "w" });
+      screen = ctrl.getBuffer().toPlainLines().join("\n");
+      expect(screen).toContain("Changes in the last 30 days");
 
-      // Resize narrower (< 90 cols) uses clickable column tabs in Status Board
-      session.width = 84;
-      session.height = 28;
-      ctrl.render();
+      // Filters apply to Activity too: an area with no events names the filter.
+      ctrl.handleEvent({ type: "key", key: "/", raw: "/" });
+      session.typeText(ctrl, "zzz");
+      ctrl.handleEvent({ type: "key", key: "enter", raw: "\r" });
       screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("planned (1)");
-      session.clickRegion(ctrl, "board-tab-shipped");
-      screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Core Store Engine");
+      expect(screen).toContain('No changes match search: "zzz".');
+      ctrl.handleEvent({ type: "key", key: "c", raw: "c" });
+      expect(ctrl.getState().search).toBe("");
+      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("Mouse support landed.");
     } finally {
       ctrl.stop();
     }
@@ -230,16 +232,18 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
 
     try {
       let screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("1 err");
+      expect(screen).toContain("1 error");
 
       session.clickRegion(ctrl, "health-toggle");
       screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Health & Drift Diagnostics");
+      expect(ctrl.getState().healthPanelOpen).toBe(true);
       expect(screen).toContain("ROADMAP_OUT_OF_SYNC");
+      expect(screen).toContain("run 'pp render'");
 
       ctrl.handleEvent({ type: "key", key: "escape", raw: "\x1b" });
       screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).not.toContain("Health & Drift Diagnostics");
+      expect(ctrl.getState().healthPanelOpen).toBe(false);
+      expect(screen).not.toContain("ROADMAP_OUT_OF_SYNC");
     } finally {
       ctrl.stop();
     }
@@ -253,9 +257,9 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
 
     try {
       const regions = ctrl.getBuffer().getHitRegions();
-      const tabCards = regions.find((r) => r.id === "tab-cards");
+      const tabCards = regions.find((r) => r.id === "tab-roadmap");
       const tabGraph = regions.find((r) => r.id === "tab-graph");
-      const tabBoard = regions.find((r) => r.id === "tab-board");
+      const tabBoard = regions.find((r) => r.id === "tab-activity");
       const refreshBtn = regions.find((r) => r.id === "refresh-btn");
 
       expect(tabCards).toBeDefined();
@@ -274,23 +278,23 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(row0Wide).toContain("TUI Test Project");
       expect(row0Wide).toContain("1 Roadmap");
       expect(row0Wide).toContain("2 Graph");
-      expect(row0Wide).toContain("3 Board");
+      expect(row0Wide).toContain("3 Activity");
       expect(row0Wide).toContain("Check OK");
 
       session.clickRegion(ctrl, "tab-graph");
       expect(ctrl.getState().viewMode).toBe("graph");
-      session.clickRegion(ctrl, "tab-board");
-      expect(ctrl.getState().viewMode).toBe("board");
-      session.clickRegion(ctrl, "tab-cards");
-      expect(ctrl.getState().viewMode).toBe("cards");
+      session.clickRegion(ctrl, "tab-activity");
+      expect(ctrl.getState().viewMode).toBe("activity");
+      session.clickRegion(ctrl, "tab-roadmap");
+      expect(ctrl.getState().viewMode).toBe("roadmap");
 
       // Medium width (96 cols): compact tabs sit in row 0 without overlapping right pills or truncating title
       session.width = 96;
       session.height = 30;
       ctrl.render();
       const medRegions = ctrl.getBuffer().getHitRegions();
-      const medCards = medRegions.find((r) => r.id === "tab-cards")!;
-      const medBoard = medRegions.find((r) => r.id === "tab-board")!;
+      const medCards = medRegions.find((r) => r.id === "tab-roadmap")!;
+      const medBoard = medRegions.find((r) => r.id === "tab-activity")!;
       const medRefresh = medRegions.find((r) => r.id === "refresh-btn")!;
       expect(medCards.y).toBe(0);
       expect(medBoard.y).toBe(0);
@@ -300,16 +304,16 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(row0Med).toContain("TUI Test Project");
       expect(row0Med).toContain("1 Roadmap");
       expect(row0Med).toContain("2 Graph");
-      expect(row0Med).toContain("3 Board");
+      expect(row0Med).toContain("3 Activity");
 
       // Ultra-narrow width (78 cols): tabs fall back below row 0 and keep project title untruncated
       session.width = 78;
       session.height = 24;
       ctrl.render();
       const narrowRegions = ctrl.getBuffer().getHitRegions();
-      const narrowCards = narrowRegions.find((r) => r.id === "tab-cards")!;
+      const narrowCards = narrowRegions.find((r) => r.id === "tab-roadmap")!;
       const narrowGraph = narrowRegions.find((r) => r.id === "tab-graph")!;
-      const narrowBoard = narrowRegions.find((r) => r.id === "tab-board")!;
+      const narrowBoard = narrowRegions.find((r) => r.id === "tab-activity")!;
       expect(narrowCards.y).toBeGreaterThan(0);
       expect(narrowGraph.y).toBeGreaterThan(0);
       expect(narrowBoard.y).toBeGreaterThan(0);
@@ -319,164 +323,70 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     }
   });
 
-  test("PAUSED/CUT KPI filters exactly the features it counts in mixed and cut-only roadmaps", () => {
+  test("distribution counts filter exactly the features they count; zero counts take no segment", () => {
     seedRoadmap(tempDir);
     const svc = new RoadmapService(tempDir);
-    svc.addFeature({
-      id: "paused-auth",
-      title: "Paused Auth Rework",
-      milestone: "v0.2",
-      status: "paused",
-      area: "Core",
-    });
-    svc.addFeature({
-      id: "cut-legacy",
-      title: "Cut Legacy Import",
-      milestone: "v0.2",
-      status: "cut",
-      area: "Docs",
-    });
+    svc.addFeature({ id: "paused-auth", title: "Paused Auth Rework", milestone: "v0.2", status: "paused", area: "Core" });
+    svc.addFeature({ id: "cut-legacy", title: "Cut Legacy Import", milestone: "v0.2", status: "cut", area: "Docs" });
 
     const session = new VirtualSession(140, 40);
     const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
     ctrl.start();
 
     try {
-      let screen = ctrl.getBuffer().toPlainLines().join("\n");
-      const kpiRow = screen.split("\n").find((line) => line.includes("PAUSED/CUT"));
-      expect(kpiRow).toContain("2");
+      const distRow = () => ctrl.getBuffer().toPlainLines().find((line) => line.includes("planned ·"))!;
+      expect(distRow()).toContain("1 planned · 1 in progress · 1 shipped · 1 paused · 1 cut");
 
-      session.clickRegion(ctrl, "kpi-paused");
-      expect(ctrl.getState().statusFilter).toBe("paused|cut");
+      session.clickRegion(ctrl, "dist-paused");
+      expect(ctrl.getState().statusFilter).toBe("paused");
       expect(ctrl.getState().drawerFeatureId).toBeNull();
-
-      screen = ctrl.getBuffer().toPlainLines().join("\n");
+      let screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("Paused Auth Rework");
-      expect(screen).toContain("Cut Legacy Import");
+      expect(screen).not.toContain("Cut Legacy Import");
       expect(screen).not.toContain("Docs Polish");
-      expect(screen).not.toContain("Core Store Engine");
-      const featuresRow = screen.split("\n").find((line) => line.includes("FEATURES"));
-      expect(featuresRow).toContain("2/5");
+      // The counts stay visible (scoped by the other filters, not by status).
+      expect(distRow()).toContain("1 cut");
 
-      // Board and graph show the same filtered set (paused + cut columns, no planned cards).
-      ctrl.handleEvent({ type: "key", key: "3", raw: "3" });
-      screen = ctrl.getBuffer().toPlainLines().join("\n");
-      const boardCols = ctrl.getBuffer().getHitRegions().filter((r) => r.kind === "board-col");
-      expect(boardCols.map((r) => String(r.data)).sort()).toEqual(["cut", "in-progress", "paused", "planned", "shipped"]);
-      expect(screen).toContain("Paused Auth Rework");
-      expect(screen).toContain("Cut Legacy Import");
-      expect(screen).not.toContain("Docs Polish");
-      expect(screen).not.toContain("Core Store Engine");
+      // Graph shows the same filtered set.
       ctrl.handleEvent({ type: "key", key: "2", raw: "2" });
       screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Cut Legacy Import");
-      expect(screen).toContain("Paused Auth Rework");
-      expect(screen).not.toContain("Docs Polish");
+      expect(ctrl.getBuffer().getHitRegions().filter((r) => r.kind === "graph-node").map((r) => r.data)).toEqual(["paused-auth"]);
 
-      // Clicking the tally again clears the combined filter.
       ctrl.handleEvent({ type: "key", key: "1", raw: "1" });
-      session.clickRegion(ctrl, "kpi-paused");
+      session.clickRegion(ctrl, "dist-paused");
       expect(ctrl.getState().statusFilter).toBe("");
-      screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Docs Polish");
+      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("Docs Polish");
+
+      // Keyboard path: s opens the status filter, Enter applies.
+      ctrl.handleEvent({ type: "key", key: "s", raw: "s" });
+      expect(ctrl.getState().openPicker?.kind).toBe("status");
+      ctrl.handleEvent({ type: "key", key: "down", raw: "" });
+      ctrl.handleEvent({ type: "key", key: "enter", raw: "\r" });
+      expect(ctrl.getState().statusFilter).toBe("planned");
     } finally {
       ctrl.stop();
     }
 
-    // Cut-only roadmap: the nonzero tally yields exactly those features, not an empty view.
+    // Cut-only roadmap: one segment, and it filters to exactly those features.
     const cutDir = join(tempDir, "cut-only");
     const cutSvc = new RoadmapService(cutDir);
     cutSvc.init({ name: "Cut Only" });
     cutSvc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "planned", order: 10 });
-    cutSvc.addFeature({ id: "cut-a", title: "Cut Alpha", milestone: "v0.1", status: "cut" });
-    cutSvc.addFeature({ id: "cut-b", title: "Cut Beta", milestone: "v0.1", status: "cut" });
-    cutSvc.addFeature({ id: "cut-c", title: "Cut Gamma", milestone: "v0.1", status: "cut" });
-
+    for (const [id, title] of [["cut-a", "Cut Alpha"], ["cut-b", "Cut Beta"], ["cut-c", "Cut Gamma"]]) {
+      cutSvc.addFeature({ id: id!, title: title!, milestone: "v0.1", status: "cut" });
+    }
     const cutSession = new VirtualSession(140, 40);
     const cutCtrl = new TuiController({ rootDir: cutDir, noBeads: true, session: cutSession });
     cutCtrl.start();
-
     try {
-      let screen = cutCtrl.getBuffer().toPlainLines().join("\n");
-      const kpiRow = screen.split("\n").find((line) => line.includes("PAUSED/CUT"));
-      expect(kpiRow).toContain("3");
-
-      cutSession.clickRegion(cutCtrl, "kpi-paused");
-      screen = cutCtrl.getBuffer().toPlainLines().join("\n");
-      expect(cutCtrl.getState().statusFilter).toBe("paused|cut");
-      expect(screen).toContain("Cut Alpha");
-      expect(screen).toContain("Cut Beta");
-      expect(screen).toContain("Cut Gamma");
-      const featuresRow = screen.split("\n").find((line) => line.includes("FEATURES"));
-      // Cut-only roadmap: the filtered count equals the total, so no "n/total" split shows.
-      expect(featuresRow!.match(/FEATURES\s+(\d+(?:\/\d+)?)/)?.[1]).toBe("3");
+      const regions = cutCtrl.getBuffer().getHitRegions().filter((r) => r.kind === "dist-filter");
+      expect([...new Set(regions.map((r) => r.data))]).toEqual(["cut"]);
+      cutSession.clickRegion(cutCtrl, "dist-cut");
+      const screen = cutCtrl.getBuffer().toPlainLines().join("\n");
+      expect(cutCtrl.getState().statusFilter).toBe("cut");
+      for (const t of ["Cut Alpha", "Cut Beta", "Cut Gamma"]) expect(screen).toContain(t);
     } finally {
       cutCtrl.stop();
-    }
-  });
-
-  test("wheel over a board card scrolls only that card's column", () => {
-    const svc = new RoadmapService(tempDir);
-    svc.init({ name: "Overflow Board" });
-    svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "planned", order: 10 });
-    const statuses = ["planned", "in-progress", "shipped"] as const;
-    for (let i = 1; i <= 6; i++) {
-      for (const status of statuses) {
-        svc.addFeature({
-          id: `${status}-${i}`,
-          title: `${status} item ${i}`,
-          milestone: "v0.1",
-          status,
-        });
-      }
-    }
-
-    const session = new VirtualSession(140, 40);
-    const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
-    ctrl.start();
-
-    try {
-      ctrl.handleEvent({ type: "key", key: "3", raw: "3" });
-      const regions = ctrl.getBuffer().getHitRegions();
-      // A mid-column card whose hit region out-ranks the column backdrop.
-      const card = regions.find((r) => r.id === "board-card-shipped-4")!;
-      expect(card).toBeDefined();
-
-      const wx = card.x + 2;
-      const wy = card.y;
-      expect(ctrl.getBuffer().hitTest(wx, wy)?.kind).toBe("feature-card");
-
-      ctrl.handleEvent({ type: "mouse", action: "wheel-down", button: "none", x: wx, y: wy });
-      expect(ctrl.getState().boardScrollY.shipped).toBe(3);
-      expect(ctrl.getState().boardScrollY.planned ?? 0).toBe(0);
-      expect(ctrl.getState().boardScrollY["in-progress"] ?? 0).toBe(0);
-
-      ctrl.handleEvent({ type: "mouse", action: "wheel-down", button: "none", x: wx, y: wy });
-      expect(ctrl.getState().boardScrollY.shipped).toBe(6);
-
-      // Wheel over a planned card moves only the planned column.
-      const plannedCard = ctrl.getBuffer().getHitRegions().find((r) => r.id === "board-card-planned-4")!;
-      ctrl.handleEvent({
-        type: "mouse",
-        action: "wheel-down",
-        button: "none",
-        x: plannedCard.x + 2,
-        y: plannedCard.y,
-      });
-      expect(ctrl.getState().boardScrollY.planned).toBe(3);
-      expect(ctrl.getState().boardScrollY["in-progress"] ?? 0).toBe(0);
-
-      ctrl.handleEvent({
-        type: "mouse",
-        action: "wheel-up",
-        button: "none",
-        x: plannedCard.x + 2,
-        y: plannedCard.y,
-      });
-      expect(ctrl.getState().boardScrollY.planned).toBe(0);
-      expect(ctrl.getState().boardScrollY.shipped).toBe(6);
-    } finally {
-      ctrl.stop();
     }
   });
 
@@ -507,7 +417,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       ctrl.handleEvent({ type: "mouse", action: "wheel-down", button: "none", x: 0, y: 0 });
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(ctrl.getState().pickerScrollY).toBe(6);
-      expect(ctrl.getState().cardsScrollY).toBe(0);
+      expect(ctrl.getState().roadmapScrollY).toBe(0);
       expect(screen).toContain(opts[6]!.label);
       expect(screen).not.toContain(opts[5]!.label);
 
@@ -553,26 +463,26 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     try {
       session.clickRegion(ctrl, "health-toggle");
       let screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Health & Drift Diagnostics");
+      expect(ctrl.getState().healthPanelOpen).toBe(true);
       expect(screen).toContain("'f01'");
       expect(screen).not.toContain("'f30'");
+      expect(screen).toContain("more · PgDn");
 
       // Wheel over the overlay brings the final diagnostic into view with a live pill.
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 60 && !ctrl.getBuffer().toPlainLines().join("\n").includes("'f30'"); i++) {
         ctrl.handleEvent({ type: "mouse", action: "wheel-down", button: "none", x: 0, y: 0 });
       }
-      expect(ctrl.getState().healthScrollY).toBe(15);
-      expect(ctrl.getState().cardsScrollY).toBe(0);
+      expect(ctrl.getState().roadmapScrollY).toBe(0);
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("'f30'");
-      expect(screen).toContain("16-30/30");
       expect(ctrl.getBuffer().getHitRegions().find((r) => r.id === "health-jump-f30")).toBeDefined();
 
       // Keyboard page keys scroll too.
+      const atBottom = ctrl.getState().healthScrollY;
       ctrl.handleEvent({ type: "key", key: "pageup", raw: "" });
-      expect(ctrl.getState().healthScrollY).toBe(11);
+      expect(ctrl.getState().healthScrollY).toBe(atBottom - 4);
       ctrl.handleEvent({ type: "key", key: "pagedown", raw: "" });
-      expect(ctrl.getState().healthScrollY).toBe(15);
+      expect(ctrl.getState().healthScrollY).toBe(atBottom);
 
       // Inspecting the final diagnostic opens its drawer and dismisses only the overlay.
       session.clickRegion(ctrl, "health-jump-f30");
@@ -616,7 +526,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     ctrl.start();
 
     try {
-      session.clickRegion(ctrl, "card-docs-guide");
+      session.clickRegion(ctrl, "row-docs-guide");
       expect(ctrl.getState().drawerFeatureId).toBe("docs-guide");
       ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
       expect(ctrl.getState().drawerFocus).toBe("note");
@@ -681,7 +591,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     }
   });
 
-  test("keyboard selection reveals itself in cards, board columns, and pans the graph", () => {
+  test("keyboard selection reveals itself in the ledger", () => {
     const svc = new RoadmapService(tempDir);
     svc.init({ name: "Reveal Project" });
     svc.upsertMilestone({ id: "v0.1", title: "v0.1", status: "planned", order: 10 });
@@ -700,48 +610,27 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       });
     });
 
-    const session = new VirtualSession(100, 24);
+    const session = new VirtualSession(100, 14);
     const ctrl = new TuiController({ rootDir: tempDir, noBeads: true, session });
     ctrl.start();
 
     try {
-      // Cards: walking down past the fold scrolls by real card rows.
+      expect(ctrl.getState().selectedFeatureId).toBe("f01");
       for (let i = 0; i < 4; i++) {
         ctrl.handleEvent({ type: "key", key: "j", raw: "j" });
       }
       expect(ctrl.getState().selectedFeatureId).toBe("f05");
       let screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("Feature Five");
-      expect(ctrl.getState().cardsScrollY).toBeGreaterThan(0);
 
       for (let i = 0; i < 7; i++) {
         ctrl.handleEvent({ type: "key", key: "j", raw: "j" });
       }
       expect(ctrl.getState().selectedFeatureId).toBe("f12");
+      expect(ctrl.getState().roadmapScrollY).toBeGreaterThan(0);
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("Feature Twelve");
       expect(screen).not.toContain("Feature One ");
-
-      // Board: moving up into an overflowing column scrolls that column only. The
-      // landed card is read from state, then asserted fully visible with its own
-      // column scrolled and no other column touched.
-      ctrl.handleEvent({ type: "key", key: "3", raw: "3" });
-      const boardPre = ctrl.getState().selectedFeatureId;
-      ctrl.handleEvent({ type: "key", key: "k", raw: "k" });
-      const boardPost = ctrl.getState().selectedFeatureId!;
-      expect(boardPost).not.toBe(boardPre);
-      const postStatus = ctrl
-        .getState()
-        .payload.features.find((f) => f.id === boardPost)!.status;
-      const postCard = ctrl.getBuffer().getHitRegions().find((r) => r.id === `board-card-${boardPost}`)!;
-      expect(postCard).toBeDefined();
-      expect(postCard.h).toBe(5);
-      expect(ctrl.getState().boardScrollY[postStatus]).toBeGreaterThan(0);
-      screen = ctrl.getBuffer().toPlainLines().join("\n");
-      for (const other of ["planned", "in-progress", "shipped"] as const) {
-        if (other === postStatus) continue;
-        expect(ctrl.getState().boardScrollY[other] ?? 0).toBe(0);
-      }
     } finally {
       ctrl.stop();
     }
@@ -768,27 +657,33 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       ctrl.handleEvent({ type: "key", key: "2", raw: "2" });
       const startTy = ctrl.getState().graphCamera.ty;
 
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 7; i++) {
         ctrl.handleEvent({ type: "key", key: "j", raw: "j" });
       }
-      expect(ctrl.getState().graphSelectedId).toBe("a5");
+      expect(ctrl.getState().graphSelectedId).toBe("a8");
       expect(ctrl.getState().graphCamera.ty).not.toBe(startTy);
 
-      // Full (unclipped) node hit region == the node's bounding box is on screen.
-      const region = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-a5")!;
+      // A chain this deep cannot fit 24 rows: the overflow cue shows and keyboard
+      // selection pans to each node. Full (unclipped) node hit region == on screen.
+      expect(ctrl.getState().graphCamera.overflow).toBe(true);
+      expect(ctrl.getBuffer().getHitRegions().some((r) => r.id === "graph-overflow")).toBe(true);
+      const cam = ctrl.getState().graphCamera;
+      const loaded = svc.load();
+      const node = layoutForCamera(loaded.features, loaded.milestones, cam).nodes.get("a8")!;
+      const region = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-a8")!;
       expect(region).toBeDefined();
-      expect(region.h).toBe(4);
-      expect(region.w).toBe(28);
+      expect(region.h).toBe(node.h);
+      expect(region.w).toBe(node.w);
 
       // Moving back up pans the camera the other way; what matters is that the
       // top node is fully on screen again, not that the camera offset matches.
       const tyAtBottom = ctrl.getState().graphCamera.ty;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 7; i++) {
         ctrl.handleEvent({ type: "key", key: "k", raw: "k" });
       }
       expect(ctrl.getState().graphSelectedId).toBe("a1");
       const top = ctrl.getBuffer().getHitRegions().find((r) => r.id === "graph-node-a1")!;
-      expect(top.h).toBe(4);
+      expect(top.h).toBe(node.h);
       expect(ctrl.getState().graphCamera.ty).toBeGreaterThan(tyAtBottom);
     } finally {
       ctrl.stop();
