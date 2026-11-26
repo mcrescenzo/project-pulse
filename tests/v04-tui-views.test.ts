@@ -197,9 +197,9 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
     try {
       session.clickRegion(ctrl, "tab-board");
       let screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Planned");
-      expect(screen).toContain("In Progress");
-      expect(screen).toContain("Shipped");
+      expect(screen).toContain("planned");
+      expect(screen).toContain("in progress");
+      expect(screen).toContain("shipped");
       expect(screen).toContain("Docs Polish");
       expect(screen).toContain("Core Store Engine");
 
@@ -212,7 +212,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       session.height = 28;
       ctrl.render();
       screen = ctrl.getBuffer().toPlainLines().join("\n");
-      expect(screen).toContain("Planned (1)");
+      expect(screen).toContain("planned (1)");
       session.clickRegion(ctrl, "board-tab-shipped");
       screen = ctrl.getBuffer().toPlainLines().join("\n");
       expect(screen).toContain("Core Store Engine");
@@ -272,9 +272,9 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
 
       const row0Wide = ctrl.getBuffer().toPlainLines()[0]!;
       expect(row0Wide).toContain("TUI Test Project");
-      expect(row0Wide).toContain("1 Milestone Cards");
-      expect(row0Wide).toContain("2 Dependency Graph");
-      expect(row0Wide).toContain("3 Status Board");
+      expect(row0Wide).toContain("1 Roadmap");
+      expect(row0Wide).toContain("2 Graph");
+      expect(row0Wide).toContain("3 Board");
       expect(row0Wide).toContain("Check OK");
 
       session.clickRegion(ctrl, "tab-graph");
@@ -298,7 +298,7 @@ describe("v0.4 TUI Views, Filters & Health Diagnostics", () => {
       expect(medBoard.x + medBoard.w).toBeLessThan(medRefresh.x);
       const row0Med = ctrl.getBuffer().toPlainLines()[0]!;
       expect(row0Med).toContain("TUI Test Project");
-      expect(row0Med).toContain("1 Cards");
+      expect(row0Med).toContain("1 Roadmap");
       expect(row0Med).toContain("2 Graph");
       expect(row0Med).toContain("3 Board");
 

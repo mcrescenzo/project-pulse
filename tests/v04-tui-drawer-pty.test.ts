@@ -197,7 +197,7 @@ describe("v0.4 TUI Detail Drawer, Persistence, Async Beads & PTY", () => {
 
       // Open drawer, confirm hydrated Beads ref displays cleanly, type draft note, and trigger external fs.watch write
       session.click(ctrl, "card-tui-drawer");
-      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("bd:pp-99 — in_progress: Hydrated Bead");
+      expect(ctrl.getBuffer().toPlainLines().join("\n")).toContain("bd:pp-99 — in progress: Hydrated Bead");
 
       ctrl.handleEvent({ type: "key", key: "n", raw: "n" });
       session.typeText(ctrl, "Unsaved SSH draft");

@@ -7,6 +7,7 @@ import type {
 } from "./types";
 
 import { DASHBOARD_CLIENT_SCRIPT } from "./dashboard/client";
+import { PRESENT_CLIENT_JS, statusLabel, VIEW_LABELS } from "./present";
 import { DASHBOARD_CSS } from "./dashboard/styles";
 import { EARLY_THEME_SCRIPT, FAVICON_DATA_URL, SHARED_THEME_CSS } from "./dashboard/theme";
 
@@ -117,20 +118,16 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
     <div class="controls-row">
       <div class="view-tabs" role="tablist" aria-label="Roadmap view modes">
-        <button type="button" class="view-tab is-active" id="tab-cards" role="tab" aria-selected="true" data-view="cards">Milestone Cards</button>
-        <button type="button" class="view-tab" id="tab-graph" role="tab" aria-selected="false" data-view="graph">Dependency Graph</button>
-        <button type="button" class="view-tab" id="tab-board" role="tab" aria-selected="false" data-view="board">Status Board</button>
+        <button type="button" class="view-tab is-active" id="tab-cards" role="tab" aria-selected="true" data-view="cards">${VIEW_LABELS.roadmap}</button>
+        <button type="button" class="view-tab" id="tab-graph" role="tab" aria-selected="false" data-view="graph">${VIEW_LABELS.graph}</button>
+        <button type="button" class="view-tab" id="tab-board" role="tab" aria-selected="false" data-view="board">Board</button>
       </div>
 
       <section class="filters" aria-label="Roadmap filters">
         <select id="filter-milestone" aria-label="Filter by milestone"><option value="">All Milestones</option></select>
         <select id="filter-status" aria-label="Filter by status">
           <option value="">All Statuses</option>
-          <option value="planned">planned</option>
-          <option value="in-progress">in-progress</option>
-          <option value="shipped">shipped</option>
-          <option value="paused">paused</option>
-          <option value="cut">cut</option>
+          ${["planned", "in-progress", "shipped", "paused", "cut"].map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join("\n          ")}
         </select>
         <select id="filter-area" aria-label="Filter by area"><option value="">All Areas</option></select>
         <input type="search" id="filter-search" aria-label="Filter features by text" placeholder="Filter features..." />
@@ -151,7 +148,7 @@ export function buildDashboardHtml(options: DashboardHtmlOptions = { mode: "live
 
   ${embeddedDataScript}
   <script>
-    const PP_RUNTIME = ${escapeJsonForScript(runtimeConfig)};${DASHBOARD_CLIENT_SCRIPT}  </script>
+    const PP_RUNTIME = ${escapeJsonForScript(runtimeConfig)};${PRESENT_CLIENT_JS}${DASHBOARD_CLIENT_SCRIPT}  </script>
 </body>
 </html>`;
 }

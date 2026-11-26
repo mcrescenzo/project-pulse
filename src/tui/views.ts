@@ -1,5 +1,6 @@
 import type { BeadStatusInfo, Feature, FeatureStatus, Milestone, ValidationIssue } from "../types";
 import type { RoadmapViewPayload } from "../dashboard-html";
+import { formatCriteria, healthText, statusLabel, VIEW_LABELS } from "../present";
 import { ScreenBuffer, TUI_PALETTE, textCellWidth, truncateText, type CellStyle, type PaletteColor } from "./screen";
 
 /**
@@ -254,12 +255,8 @@ export function buildPickerOptions(
   if (kind === "status") {
     return [
       { value: "", label: "All Statuses" },
-      { value: "planned", label: "planned" },
-      { value: "in-progress", label: "in-progress" },
-      { value: "shipped", label: "shipped" },
-      { value: "paused", label: "paused" },
-      { value: "cut", label: "cut" },
-      { value: "paused|cut", label: "paused / cut" },
+      ...(["planned", "in-progress", "shipped", "paused", "cut"] as const).map((s) => ({ value: s, label: statusLabel(s) })),
+      { value: "paused|cut", label: `${statusLabel("paused")} / ${statusLabel("cut")}` },
     ];
   }
   return [
@@ -417,14 +414,14 @@ class ClipWriter {
 }
 
 const VIEW_TABS_FULL: Array<{ id: TuiViewMode; label: string }> = [
-  { id: "cards", label: "1 Milestone Cards" },
-  { id: "graph", label: "2 Dependency Graph" },
-  { id: "board", label: "3 Status Board" },
+  { id: "cards", label: `1 ${VIEW_LABELS.roadmap}` },
+  { id: "graph", label: `2 ${VIEW_LABELS.graph}` },
+  { id: "board", label: "3 Board" },
 ];
 
 const VIEW_TABS_COMPACT: Array<{ id: TuiViewMode; label: string }> = [
-  { id: "cards", label: "1 Cards" },
-  { id: "graph", label: "2 Graph" },
+  { id: "cards", label: `1 ${VIEW_LABELS.roadmap}` },
+  { id: "graph", label: `2 ${VIEW_LABELS.graph}` },
   { id: "board", label: "3 Board" },
 ];
 
@@ -468,8 +465,7 @@ export function renderHeaderAndKpis(
   const { payload } = state;
   const errCount = payload.check.errors.length;
   const warnCount = payload.check.warnings.length;
-  const healthLabel =
-    errCount > 0 ? `${errCount} err` : warnCount > 0 ? `${warnCount} warn` : "Check OK";
+  const healthLabel = healthText(errCount, warnCount);
   const healthStyle =
     errCount > 0
       ? { fg: TUI_PALETTE.red, bg: TUI_PALETTE.redSoft, bold: true }
@@ -592,7 +588,7 @@ export function renderHeaderAndKpis(
       fg: TUI_PALETTE.text,
     },
     { id: "kpi-shipped", filterValue: "shipped", label: "SHIPPED", value: String(shipped), fg: TUI_PALETTE.green },
-    { id: "kpi-active", filterValue: "in-progress", label: "ACTIVE", value: String(inProgress), fg: TUI_PALETTE.accent },
+    { id: "kpi-active", filterValue: "in-progress", label: statusLabel("in-progress").toUpperCase(), value: String(inProgress), fg: TUI_PALETTE.accent },
     { id: "kpi-planned", filterValue: "planned", label: "PLANNED", value: String(planned), fg: TUI_PALETTE.slate },
     { id: "kpi-paused", filterValue: "paused|cut", label: "PAUSED/CUT", value: String(pausedOrCut), fg: TUI_PALETTE.amber },
   ];
@@ -681,7 +677,7 @@ export function renderTabsAndFilters(
     {
       kind: "status",
       prefix: "S:",
-      val: state.statusFilter ? state.statusFilter.split("|").join(" / ") : "All",
+      val: state.statusFilter ? state.statusFilter.split("|").map(statusLabel).join(" / ") : "All",
     },
     { kind: "area", prefix: "A:", val: state.areaFilter || "All" },
   ];
@@ -825,7 +821,7 @@ export function renderCardsView(
       cw.fillRect(hx, secStartY + 1, idChip.length, 1, { bg: TUI_PALETTE.surface2 });
       cw.writeText(hx, secStartY + 1, idChip, idChip.length, { fg: TUI_PALETTE.muted });
       hx += idChip.length + 1;
-      const stBadge = ` ${m.status} `;
+      const stBadge = ` ${statusLabel(m.status)} `;
       cw.fillRect(hx, secStartY + 1, stBadge.length, 1, { bg: mSt.bg });
       cw.writeText(hx, secStartY + 1, stBadge, stBadge.length, { fg: mSt.fg, bold: true });
       if (targetStr) {
@@ -894,7 +890,7 @@ export function renderCardsView(
           });
           cw.addHitRegion(cx, cy, cwActual, cardH, `card-${f.id}`, "feature-card", f.id);
 
-          const stLabel = ` ${fSt.icon} ${f.status} `;
+          const stLabel = ` ${fSt.icon} ${statusLabel(f.status)} `;
           const innerW = Math.max(8, cwActual - 4);
           cw.writeText(cx + 2, cy + 1, f.title, Math.max(4, innerW - stLabel.length - 1), {
             fg: TUI_PALETTE.text,
@@ -926,7 +922,7 @@ export function renderCardsView(
             });
           }
 
-          const critStr = total > 0 ? `${done}/${total} criteria` : "No criteria";
+          const critStr = formatCriteria(done, total);
           cw.writeText(cx + 2, cy + 3, critStr, Math.min(16, innerW), { fg: TUI_PALETTE.muted });
           if (total > 0 && innerW > 20) {
             cw.drawProgress(
@@ -945,7 +941,7 @@ export function renderCardsView(
             footerLine = `deps: ${f.depends_on.join(", ")}`;
           } else if (beads.length > 0) {
             const firstB = beads[0]!;
-            const bState = firstB.available ? (firstB.found ? `[${firstB.status}]` : "[missing]") : "";
+            const bState = firstB.available ? (firstB.found ? `[${statusLabel(firstB.status ?? "")}]` : "[missing]") : "";
             footerLine = `${firstB.ref} ${bState}`.trim();
             footerFg = firstB.found
               ? firstB.status === "closed"
@@ -998,11 +994,11 @@ export function renderBoardView(
   }
 
   const labels: Record<FeatureStatus, string> = {
-    planned: "Planned",
-    "in-progress": "In Progress",
-    shipped: "Shipped",
-    paused: "Paused",
-    cut: "Cut",
+    planned: statusLabel("planned"),
+    "in-progress": statusLabel("in-progress"),
+    shipped: statusLabel("shipped"),
+    paused: statusLabel("paused"),
+    cut: statusLabel("cut"),
   };
 
   const orderedFeatureIds: string[] = [];
@@ -1145,7 +1141,7 @@ function renderBoardColumn(
     cw.writeText(cardX + 2, cy + 2, f.id, Math.max(4, cardW - 4), { fg: TUI_PALETTE.muted });
     const done = f.ship_criteria.filter((c) => c.done).length;
     const total = f.ship_criteria.length;
-    const meta = [f.milestone, f.area, total > 0 ? `${done}/${total}` : ""]
+    const meta = [f.milestone, f.area, total > 0 ? formatCriteria(done, total) : ""]
       .filter(Boolean)
       .join(" · ");
     cw.writeText(cardX + 2, cy + 3, meta, Math.max(4, cardW - 4), { fg: TUI_PALETTE.slate });

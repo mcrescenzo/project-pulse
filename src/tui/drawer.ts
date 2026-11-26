@@ -1,6 +1,7 @@
 import type { Feature, FeatureStatus } from "../types";
 import { ScreenBuffer, TUI_PALETTE, glyphCellWidth, sanitizeTerminalText, segmentText, textCellWidth, truncateText, type CellStyle } from "./screen";
 import { HitLayer, drawPill, getStatusStyle, type Rect, type TuiState } from "./views";
+import { formatTimestamp, statusLabel, VIEW_LABELS } from "../present";
 
 export interface DrawerRectInfo extends Rect {
   mode: "split" | "modal";
@@ -312,7 +313,7 @@ export function renderFeatureDrawer(
   for (const s of statuses) {
     const active = feature.status === s;
     const st = getStatusStyle(s);
-    const label = active ? `${st.icon} ${s}` : s;
+    const label = active ? `${st.icon} ${statusLabel(s)}` : statusLabel(s);
     // Measure in terminal cells (multi-cell icons) so pills cannot overlap.
     const pillW = textCellWidth(` ${label} `);
     if (sx > innerX && sx + pillW > innerX + innerW) {
@@ -394,7 +395,7 @@ export function renderFeatureDrawer(
       const suffix =
         b && b.available
           ? b.found
-            ? ` — ${b.status}${b.title ? `: ${b.title}` : ""}`
+            ? ` — ${statusLabel(b.status ?? "")}${b.title ? `: ${b.title}` : ""}`
             : " — NOT FOUND"
           : state.beadsLoading
           ? " — resolving…"
@@ -541,7 +542,7 @@ export function renderFeatureDrawer(
       const startY = vy;
       ops.push((cw) => {
         cw.fill(innerX, startY, innerW, 1 + lines.length, { bg: TUI_PALETTE.surface2 });
-        cw.write(innerX + 1, startY, u.at, innerW - 2, { fg: TUI_PALETTE.muted });
+        cw.write(innerX + 1, startY, formatTimestamp(u.at), innerW - 2, { fg: TUI_PALETTE.muted });
         lines.forEach((ln, li) => {
           cw.write(innerX + 1, startY + 1 + li, ln, innerW - 2, { fg: TUI_PALETTE.text });
         });
@@ -600,7 +601,7 @@ export function renderHelpOverlay(buf: ScreenBuffer, width: number, height: numb
   );
 
   const lines: Array<[string, string]> = [
-    ["1 / 2 / 3", "Switch Milestone Cards, Dependency Graph, Status Board"],
+    ["1 / 2 / 3", `Switch ${VIEW_LABELS.roadmap}, ${VIEW_LABELS.graph}, Board`],
     ["/ Search", "Filter features by title, ID, or description"],
     ["Click pills", "Open Milestone / Status / Area dropdown filters & Reset"],
     ["j / k / Wheel", "Select features or scroll active view / drawer"],

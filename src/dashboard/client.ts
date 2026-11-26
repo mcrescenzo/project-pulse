@@ -38,14 +38,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
     }
 
     function formatTimestamp(iso) {
-      if (!iso) return "";
-      const date = new Date(iso);
-      if (Number.isNaN(date.getTime())) return iso;
-      try {
-        return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
-      } catch {
-        return iso;
-      }
+      return PP_PRESENT.formatTimestamp(iso);
     }
 
     function getEffectiveTheme() {
@@ -320,19 +313,19 @@ export const DASHBOARD_CLIENT_SCRIPT = `
                   ? '<div class="card-meta">' + f.refs.map((r) => {
                       const b = beads.find((x) => x.ref === r);
                       const stateCls = b && b.available ? (b.found ? "ref-" + esc(b.status || "open") : "ref-missing") : "";
-                      const suffix = b && b.available ? (b.found ? " [" + b.status + "]" : " [missing]") : "";
+                      const suffix = b && b.available ? (b.found ? " [" + PP_PRESENT.statusLabel(b.status || "open") + "]" : " [missing]") : "";
                       return '<span class="ref-chip ' + stateCls + '">' + esc(r + suffix) + "</span>";
                     }).join(" ") + "</div>"
                   : "";
-                return '<article class="card" tabindex="0" role="button" aria-label="Open ' + esc(f.title) + ' (' + esc(f.status) + ')" data-feature-id="' + esc(f.id) + '">' +
+                return '<article class="card" tabindex="0" role="button" aria-label="Open ' + esc(f.title) + ' (' + esc(PP_PRESENT.statusLabel(f.status)) + ')" data-feature-id="' + esc(f.id) + '">' +
                   '<div class="card-top"><div class="card-title-wrap"><div class="card-title">' + esc(f.title) + '</div><div class="card-id">' + esc(f.id) + "</div></div>" +
-                  '<span class="pill status-' + esc(f.status) + '">' + esc(f.status) + "</span></div>" +
+                  '<span class="pill status-' + esc(f.status) + '">' + esc(PP_PRESENT.statusLabel(f.status)) + "</span></div>" +
                   (f.description ? '<p class="card-desc">' + esc(f.description) + "</p>" : "") +
                   '<div class="card-meta">' +
                     (f.area ? '<span class="area-badge">' + esc(f.area) + "</span>" : "") +
                     (total > 0
-                      ? "<span>" + done + "/" + total + ' criteria</span><span class="mini-track" aria-hidden="true"><span class="mini-fill' + (criteriaPct === 100 ? " is-done" : "") + '" style="width:' + criteriaPct + '%"></span></span>'
-                      : "<span>No criteria</span>") +
+                      ? "<span>" + PP_PRESENT.formatCriteria(done, total) + '</span><span class="mini-track" aria-hidden="true"><span class="mini-fill' + (criteriaPct === 100 ? " is-done" : "") + '" style="width:' + criteriaPct + '%"></span></span>'
+                      : "<span>" + PP_PRESENT.formatCriteria(0, 0) + "</span>") +
                   "</div>" +
                   depsHtml +
                   refsHtml +
@@ -343,7 +336,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
 
           return '<section class="milestone">' +
             '<div class="milestone-head">' +
-              '<div class="milestone-title"><h2>' + esc(m.title) + '</h2><span class="code-tag">' + esc(m.id) + '</span><span class="pill status-' + esc(m.status) + '">' + esc(m.status) + "</span>" +
+              '<div class="milestone-title"><h2>' + esc(m.title) + '</h2><span class="code-tag">' + esc(m.id) + '</span><span class="pill status-' + esc(m.status) + '">' + esc(PP_PRESENT.statusLabel(m.status)) + "</span>" +
               (m.target ? '<span class="code-tag">' + esc(m.target) + "</span>" : "") + "</div>" +
               '<div class="code-tag">' + mShipped + "/" + allMFeatures.length + " shipped (" + pct + "%)</div>" +
             "</div>" +
@@ -523,8 +516,8 @@ export const DASHBOARD_CLIENT_SCRIPT = `
         const done = f.ship_criteria.filter((c) => c.done).length;
         const total = f.ship_criteria.length;
         return '<button type="button" class="graph-node" data-feature-id="' + esc(f.id) + '" style="left:' + p.x + "px;top:" + p.y + "px;width:" + NODE_W + "px;height:" + NODE_H + 'px">' +
-          '<div class="graph-node-top"><span class="graph-node-title">' + esc(f.title) + '</span><span class="pill status-' + esc(f.status) + '" style="padding:2px 7px;font-size:var(--fs-xs)">' + esc(f.status) + "</span></div>" +
-          '<div class="graph-node-meta"><span>' + esc(f.milestone) + (f.area ? " · " + esc(f.area) : "") + "</span><span>" + done + "/" + total + " criteria</span></div>" +
+          '<div class="graph-node-top"><span class="graph-node-title">' + esc(f.title) + '</span><span class="pill status-' + esc(f.status) + '" style="padding:2px 7px;font-size:var(--fs-xs)">' + esc(PP_PRESENT.statusLabel(f.status)) + "</span></div>" +
+          '<div class="graph-node-meta"><span>' + esc(f.milestone) + (f.area ? " · " + esc(f.area) : "") + "</span><span>" + PP_PRESENT.formatCriteria(done, total) + "</span></div>" +
         "</button>";
       }).join("");
 
@@ -820,11 +813,11 @@ export const DASHBOARD_CLIENT_SCRIPT = `
       if (hasCut) columns.push("cut");
 
       const labels = {
-        planned: "Planned",
-        "in-progress": "In Progress",
-        shipped: "Shipped",
-        paused: "Paused",
-        cut: "Cut",
+        planned: PP_PRESENT.statusLabel("planned"),
+        "in-progress": PP_PRESENT.statusLabel("in-progress"),
+        shipped: PP_PRESENT.statusLabel("shipped"),
+        paused: PP_PRESENT.statusLabel("paused"),
+        cut: PP_PRESENT.statusLabel("cut"),
       };
 
       container.innerHTML = '<div class="board-grid">' + columns.map((colStatus) => {
@@ -834,7 +827,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
           : colFeatures.map((f) => {
               const done = f.ship_criteria.filter((c) => c.done).length;
               const total = f.ship_criteria.length;
-              return '<article class="board-card" tabindex="0" role="button" aria-label="Open ' + esc(f.title) + ' (' + esc(f.status) + ')" data-feature-id="' + esc(f.id) + '">' +
+              return '<article class="board-card" tabindex="0" role="button" aria-label="Open ' + esc(f.title) + ' (' + esc(PP_PRESENT.statusLabel(f.status)) + ')" data-feature-id="' + esc(f.id) + '">' +
                 '<div class="card-title">' + esc(f.title) + "</div>" +
                 '<div class="card-id">' + esc(f.id) + "</div>" +
                 '<div class="card-meta">' +
@@ -864,14 +857,14 @@ export const DASHBOARD_CLIENT_SCRIPT = `
 
       const healthBadge = document.getElementById("health-badge");
       if (data.check.ok && data.check.warnings.length === 0) {
-        healthBadge.className = "pill pill-btn status-shipped";
-        healthBadge.textContent = "Check OK";
+        healthBadge.className = "pill pill-btn pill-ok";
+        healthBadge.textContent = PP_PRESENT.healthText(0, 0);
       } else if (data.check.ok) {
         healthBadge.className = "pill pill-btn pill-warn";
-        healthBadge.textContent = data.check.warnings.length + " warning(s)";
+        healthBadge.textContent = PP_PRESENT.healthText(0, data.check.warnings.length);
       } else {
         healthBadge.className = "pill pill-btn pill-err";
-        healthBadge.textContent = data.check.errors.length + " error(s)";
+        healthBadge.textContent = PP_PRESENT.healthText(data.check.errors.length, data.check.warnings.length);
       }
       renderHealthPanel();
 
@@ -918,9 +911,9 @@ export const DASHBOARD_CLIENT_SCRIPT = `
         ["Milestones", visibleMilestones.length, hasActiveFilters && visibleMilestones.length !== data.milestones.length ? "/ " + data.milestones.length : ""],
         ["Features", statFeatures.length, hasActiveFilters && statFeatures.length !== data.features.length ? "/ " + data.features.length : ""],
         ["Shipped", shipped, ""],
-        ["In Progress", inProgress, ""],
-        ["Planned", planned, ""],
-        ["Paused / Cut", pausedOrCut, ""],
+        [PP_PRESENT.statusLabel("in-progress"), inProgress, ""],
+        [PP_PRESENT.statusLabel("planned"), planned, ""],
+        [PP_PRESENT.statusLabel("paused") + " / " + PP_PRESENT.statusLabel("cut"), pausedOrCut, ""],
       ];
       document.getElementById("stats").innerHTML = statCards
         .map(([label, val, sub]) =>
@@ -1000,10 +993,10 @@ export const DASHBOARD_CLIENT_SCRIPT = `
       const currentDraft = state.noteDrafts[feature.id] || "";
 
       const statusBlock = isStatic
-        ? '<div><div class="section-label">Status</div><span class="pill status-' + esc(feature.status) + '">' + esc(feature.status) + "</span></div>"
+        ? '<div><div class="section-label">Status</div><span class="pill status-' + esc(feature.status) + '">' + esc(PP_PRESENT.statusLabel(feature.status)) + "</span></div>"
         : '<div><label class="section-label" for="drawer-status">Status</label>' +
             '<select id="drawer-status" aria-label="Feature status" style="width:100%;padding:8px;border-radius:var(--radius);background:var(--surface-2);color:var(--text);border:1px solid var(--border);font-family:inherit">' +
-              statuses.map((s) => '<option value="' + s + '"' + (s === feature.status ? " selected" : "") + ">" + s + "</option>").join("") +
+              statuses.map((s) => '<option value="' + s + '"' + (s === feature.status ? " selected" : "") + ">" + esc(PP_PRESENT.statusLabel(s)) + "</option>").join("") +
             "</select></div>";
 
       const noteFormBlock = isStatic
@@ -1027,7 +1020,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
           feature.refs.map((r) => {
             const b = beads.find((x) => x.ref === r);
             const stateCls = b && b.available ? (b.found ? "ref-" + esc(b.status || "open") : "ref-missing") : "";
-            const info = b && b.available ? (b.found ? " — " + b.status + (b.title ? ": " + b.title : "") : " — NOT FOUND") : "";
+            const info = b && b.available ? (b.found ? " — " + PP_PRESENT.statusLabel(b.status || "open") + (b.title ? ": " + b.title : "") : " — NOT FOUND") : "";
             return '<span class="ref-chip ' + stateCls + '">' + esc(r + info) + "</span>";
           }).join("") + "</div></div>" : "") +
         '<div><div class="section-label">Ship Criteria</div>' +

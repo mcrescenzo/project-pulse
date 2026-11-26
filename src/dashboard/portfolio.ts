@@ -1,3 +1,4 @@
+import { PRESENT_CLIENT_JS } from "../present";
 import { EARLY_THEME_SCRIPT, FAVICON_DATA_URL, SHARED_THEME_CSS } from "./theme";
 
 /**
@@ -49,6 +50,7 @@ export function buildPortfolioHtml(): string {
     }
     .pill-live { background: var(--live-soft); color: var(--live); }
     .pill-live .dot { width: 8px; height: 8px; border-radius: var(--radius-sm); background: var(--live); }
+    .pill-ok { background: var(--ok-soft); color: var(--ok); }
     .pill-err { background: var(--danger-soft); color: var(--danger); }
     .icon-btn {
       padding: 6px 12px;
@@ -129,7 +131,7 @@ export function buildPortfolioHtml(): string {
     <main id="projects" class="projects-grid"></main>
   </div>
 
-  <script>
+  <script>${PRESENT_CLIENT_JS}
     function esc(str) {
       return String(str ?? "")
         .replace(/&/g, "&amp;")
@@ -173,8 +175,8 @@ export function buildPortfolioHtml(): string {
         const shipped = p.totals.shipped || 0;
         const pct = total ? Math.round((shipped / total) * 100) : 0;
         const healthPill = p.check && p.check.ok
-          ? '<span class="pill pill-live">Check OK</span>'
-          : '<span class="pill pill-err">' + ((p.check && p.check.errorCount) || 1) + " error(s)</span>";
+          ? '<span class="pill pill-ok">' + PP_PRESENT.healthText(0, 0) + '</span>'
+          : '<span class="pill pill-err">' + PP_PRESENT.healthText((p.check && p.check.errorCount) || 1, 0) + "</span>";
         return '<article class="project-card" data-project-slug="' + esc(p.slug) + '">' +
           '<div class="project-top"><div><h2 class="project-title">' + esc(p.name) + '</h2><div class="project-path">' + esc(p.rootDir) + "</div></div>" + healthPill + "</div>" +
           (p.summary ? '<p class="project-summary">' + esc(p.summary) + "</p>" : "") +

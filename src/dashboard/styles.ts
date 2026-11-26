@@ -80,6 +80,7 @@ export const DASHBOARD_CSS = `
     .pill-live { background: var(--live-soft); color: var(--live); border-color: color-mix(in srgb, var(--live) 35%, transparent); }
     .pill-live .dot { width: 8px; height: 8px; border-radius: var(--radius-sm); display: inline-block; background: var(--live); }
     .pill-snapshot { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+    .pill-ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
     .pill-warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
     .pill-err { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
     .icon-btn {
