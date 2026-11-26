@@ -390,14 +390,14 @@ Shared groundwork for the parallel web and TUI redesign PRs.
 
 ### TUI: Roadmap ledger, Activity and mode-aware footer (`dashboard-tui`)
 
-**Status:** `planned` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.21`
+**Status:** `in-progress` | **Area:** Dashboard | **Depends on:** `dashboard-foundation` | **Refs:** `bd:pp-t80.21`
 
-**Ship Criteria (0/5):**
-- [ ] Roadmap ledger with a distribution line replaces Milestone Cards and KPI boxes
-- [ ] Activity view replaces the Status Board
-- [ ] Graph fits on open and gives every edge its own channel
-- [ ] Footer always ends with Help and Quit at 80 columns, with wrapped help and expiring toasts
-- [ ] Drawer feedback on the control, edit-freeze notice, ship confirm and Unblocks
+**Ship Criteria (5/5):**
+- [x] Roadmap ledger with a distribution line replaces Milestone Cards and KPI boxes
+- [x] Activity view replaces the Status Board
+- [x] Graph fits on open and gives every edge its own channel
+- [x] Footer always ends with Help and Quit at 80 columns, with wrapped help and expiring toasts
+- [x] Drawer feedback on the control, edit-freeze notice, ship confirm and Unblocks
 
 ### Verify and release v2.1.0 (`dashboard-release`)
 
