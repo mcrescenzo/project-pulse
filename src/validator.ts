@@ -225,6 +225,18 @@ export function validateStore(input: ValidateStoreInput): ValidationIssue[] {
       }
     }
 
+    if (feature.status === "shipped") {
+      const open = feature.ship_criteria.filter((c) => !c.done).length;
+      if (open > 0) {
+        issues.push({
+          level: "warning",
+          code: "SHIPPED_WITH_OPEN_CRITERIA",
+          entityId: feature.id,
+          message: `Feature '${feature.id}' is shipped with ${open} of ${feature.ship_criteria.length} ship criteria still open; mark them done or move the feature back`,
+        });
+      }
+    }
+
     if (feature.ship_criteria.length > MAX_RECOMMENDED_SHIP_CRITERIA) {
       issues.push({
         level: "warning",

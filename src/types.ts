@@ -88,6 +88,15 @@ export interface CheckResult {
   ok: boolean;
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
+  /**
+   * False when parse, schema or dependency errors make the store refuse every write. A stale
+   * ROADMAP.md or Beads drift alone keeps it true. Absent on results built outside the store.
+   */
+  editable?: boolean;
+  /** The errors behind `editable: false` (a subset of `errors`). */
+  blocking?: ValidationIssue[];
+  /** ROADMAP.md is missing or out of sync; any write or `pp render` regenerates it. */
+  stale?: boolean;
   beads?: Record<string, BeadStatusInfo[]>;
 }
 

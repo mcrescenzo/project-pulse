@@ -13,6 +13,7 @@ import {
   findProjectRoot,
   formatFeatureText,
   formatSummaryText,
+  RoadmapFrozenError,
   RoadmapService,
 } from "./store";
 import { runTui } from "./tui/app";
@@ -964,6 +965,15 @@ export async function runCli(argv: string[], deps: CliDependencies = {}): Promis
     }
   } catch (error) {
     const message = (error as Error).message;
+    if (error instanceof RoadmapFrozenError) {
+      // The requested change is fine; existing errors freeze every write until they are fixed.
+      if (jsonMode) {
+        console.log(JSON.stringify({ ok: false, code: "ROADMAP_FROZEN", error: message, errors: error.issues }));
+      } else {
+        console.error(message);
+      }
+      return 1;
+    }
     if (jsonMode) {
       console.log(JSON.stringify({ ok: false, error: message }));
     } else {

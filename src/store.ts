@@ -500,6 +500,43 @@ let removalSeq = 0;
 /**
  * File-backed domain service operating on a repository root's `.project-pulse/` directory.
  */
+/**
+ * Error codes reported by `pp check` that never make the store refuse a write: a stale ROADMAP.md
+ * is re-rendered by every write and by `pp render`. (Beads drift is added after this check.)
+ */
+const NON_BLOCKING_ERROR_CODES = new Set(["ROADMAP_OUT_OF_SYNC"]);
+
+/**
+ * Thrown when a write is refused only because the roadmap already has parse, schema or dependency
+ * errors. `issues` lists every such error so the caller can show what to fix first.
+ */
+export class RoadmapFrozenError extends Error {
+  readonly issues: ValidationIssue[];
+  constructor(issues: ValidationIssue[]) {
+    const n = issues.length;
+    super(
+      `Roadmap has ${n} ${n === 1 ? "error" : "errors"}; fix ${n === 1 ? "it" : "them"} first:\n` +
+        issues.map((i) => `  [${i.code}] ${i.message}`).join("\n")
+    );
+    this.name = "RoadmapFrozenError";
+    this.issues = issues;
+  }
+}
+
+/** Errors that make the locked write path refuse every write: parse errors plus schema and DAG errors. */
+function writeBlockingIssues(loaded: LoadedStore): ValidationIssue[] {
+  const parse = loaded.parseIssues.filter((i) => i.level === "error");
+  const schema = validateStore({
+    config: loaded.config,
+    milestones: loaded.milestones,
+    features: loaded.features,
+    currentRoadmapMd: null,
+    expectedRoadmapMd: "",
+    checkRoadmapSync: false,
+  }).filter((i) => i.level === "error");
+  return [...parse, ...schema];
+}
+
 export class RoadmapService {
   readonly rootDir: string;
   readonly pulseDir: string;
@@ -853,13 +890,19 @@ export class RoadmapService {
     };
   }
 
+  /**
+   * Validates a candidate state inside the locked write path. A candidate that only repeats errors
+   * the store already had is refused with RoadmapFrozenError listing every existing error, so callers
+   * can say the roadmap must be fixed first instead of blaming the requested change. Errors the
+   * change itself introduces are reported as an ordinary Error naming just those errors.
+   */
   private validateCandidate(
-    config: PulseConfig,
+    baseline: LoadedStore,
     milestones: Milestone[],
     features: Feature[]
   ): ValidationIssue[] {
     const issues = validateStore({
-      config,
+      config: baseline.config,
       milestones,
       features,
       currentRoadmapMd: null,
@@ -868,7 +911,14 @@ export class RoadmapService {
     });
     const errors = issues.filter((i) => i.level === "error");
     if (errors.length > 0) {
-      throw new Error(errors.map((e) => e.message).join("; "));
+      const existing = writeBlockingIssues(baseline);
+      const key = (i: ValidationIssue) => `${i.code}\u0000${i.entityId ?? ""}\u0000${i.message}`;
+      const existingKeys = new Set(existing.map(key));
+      const introduced = errors.filter((e) => !existingKeys.has(key(e)));
+      if (introduced.length === 0 && existing.length > 0) {
+        throw new RoadmapFrozenError(existing);
+      }
+      throw new Error(introduced.map((e) => e.message).join("; "));
     }
     return issues.filter((i) => i.level === "warning");
   }
@@ -881,7 +931,7 @@ export class RoadmapService {
     assertValidId(input.id, "milestone");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
 
     const existing = loaded.milestones.find((m) => m.id === input.id);
@@ -898,7 +948,7 @@ export class RoadmapService {
       ...loaded.milestones.filter((m) => m.id !== milestone.id),
       milestone,
     ];
-    const warnings = this.validateCandidate(loaded.config, candidateMilestones, loaded.features);
+    const warnings = this.validateCandidate(loaded, candidateMilestones, loaded.features);
 
     this.writeMilestoneFile(milestone);
     const { roadmapPath } = this.render();
@@ -913,7 +963,7 @@ export class RoadmapService {
     assertValidId(id, "milestone");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.milestones.find((m) => m.id === id);
     if (!existing) {
@@ -933,7 +983,7 @@ export class RoadmapService {
       ...loaded.milestones.filter((m) => m.id !== id),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, candidateMilestones, loaded.features);
+    const warnings = this.validateCandidate(loaded, candidateMilestones, loaded.features);
 
     this.writeMilestoneFile(updated);
     const { roadmapPath } = this.render();
@@ -948,7 +998,7 @@ export class RoadmapService {
     assertValidId(input.id, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     if (loaded.features.some((f) => f.id === input.id)) {
       throw new Error(`Feature '${input.id}' already exists; use 'pp feature update ${input.id}'`);
@@ -972,7 +1022,7 @@ export class RoadmapService {
     };
 
     const candidateFeatures = [...loaded.features, feature];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(feature);
     const { roadmapPath } = this.render();
@@ -987,7 +1037,7 @@ export class RoadmapService {
     assertValidId(input.id, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === input.id);
     if (!existing) {
@@ -1016,7 +1066,7 @@ export class RoadmapService {
       ...loaded.features.filter((f) => f.id !== existing.id),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
@@ -1059,7 +1109,7 @@ export class RoadmapService {
     assertValidId(id, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === id);
     if (!existing) {
@@ -1127,7 +1177,7 @@ export class RoadmapService {
       ...loaded.features.filter((f) => f.id !== id),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
@@ -1142,7 +1192,7 @@ export class RoadmapService {
     assertValidId(id, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === id);
     if (!existing) {
@@ -1171,7 +1221,7 @@ export class RoadmapService {
       }
     }
 
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
     // Pre-flight and rollback (pp-f7m.26): a failure while rewriting dependents, unlinking the
     // feature, or re-rendering must leave the prior entities and roadmap untouched.
     this.assertDirsWritable([
@@ -1227,7 +1277,7 @@ export class RoadmapService {
     assertValidId(id, "milestone");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.milestones.find((m) => m.id === id);
     if (!existing) {
@@ -1268,7 +1318,7 @@ export class RoadmapService {
     });
     const candidateMilestones = loaded.milestones.filter((m) => m.id !== id);
 
-    const warnings = this.validateCandidate(loaded.config, candidateMilestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, candidateMilestones, candidateFeatures);
     // Pre-flight and rollback (pp-f7m.26): moving features before unlinking the milestone means
     // a failure anywhere (read-only milestones directory, failed dependent write, failed render)
     // must restore every touched file instead of silently applying a partial move.
@@ -1331,7 +1381,7 @@ export class RoadmapService {
     assertValidId(featureId, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === featureId);
     if (!existing) {
@@ -1356,7 +1406,7 @@ export class RoadmapService {
       ...loaded.features.filter((f) => f.id !== featureId),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
@@ -1380,7 +1430,7 @@ export class RoadmapService {
 
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === featureId);
     if (!existing) {
@@ -1397,7 +1447,7 @@ export class RoadmapService {
       ...loaded.features.filter((f) => f.id !== featureId),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
@@ -1412,7 +1462,7 @@ export class RoadmapService {
     assertValidId(input.id, "feature");
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const existing = loaded.features.find((f) => f.id === input.id);
     if (!existing) {
@@ -1458,7 +1508,7 @@ export class RoadmapService {
       ...loaded.features.filter((f) => f.id !== input.id),
       updated,
     ];
-    const warnings = this.validateCandidate(loaded.config, loaded.milestones, candidateFeatures);
+    const warnings = this.validateCandidate(loaded, loaded.milestones, candidateFeatures);
 
     this.writeFeatureFile(updated);
     const { roadmapPath } = this.render();
@@ -1472,7 +1522,7 @@ export class RoadmapService {
   private renderLocked(): { roadmapPath: string; content: string } {
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const content = renderRoadmapMarkdown(loaded.config, loaded.milestones, loaded.features);
     writeFileAtomic(this.roadmapPath, content);
@@ -1504,11 +1554,15 @@ export class RoadmapService {
     const allIssues = [...loaded.parseIssues, ...validationIssues];
     const errors = allIssues.filter((i) => i.level === "error");
     const warnings = allIssues.filter((i) => i.level === "warning");
+    const blocking = errors.filter((i) => !NON_BLOCKING_ERROR_CODES.has(i.code));
 
     return {
       ok: errors.length === 0,
       errors,
       warnings,
+      editable: blocking.length === 0,
+      blocking,
+      stale: errors.some((i) => i.code === "ROADMAP_OUT_OF_SYNC"),
     };
   }
 
@@ -1524,6 +1578,8 @@ export class RoadmapService {
           },
         ],
         warnings: [],
+        editable: false,
+        stale: false,
       };
     }
 
@@ -1541,6 +1597,8 @@ export class RoadmapService {
           },
         ],
         warnings: [],
+        editable: false,
+        stale: false,
       };
     }
 
@@ -1605,6 +1663,9 @@ export class RoadmapService {
       ok: errors.length === 0,
       errors,
       warnings,
+      editable: base.editable,
+      blocking: base.blocking,
+      stale: base.stale,
       beads: resolvedMap,
     };
   }
@@ -1612,7 +1673,7 @@ export class RoadmapService {
   summary(options: { milestone?: string; status?: string } = {}): SummaryResult {
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
 
     const filterMilestone = options.milestone;
@@ -1697,7 +1758,7 @@ export class RoadmapService {
   ): Promise<ShowFeatureResult> {
     const loaded = this.load();
     if (loaded.parseIssues.length > 0) {
-      throw new Error(loaded.parseIssues.map((i) => i.message).join("; "));
+      throw new RoadmapFrozenError(loaded.parseIssues);
     }
     const feature = loaded.features.find((f) => f.id === featureId);
     if (!feature) {
