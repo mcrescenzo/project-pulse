@@ -7,6 +7,7 @@ import { exportStaticHtml } from "../src/export";
 import { RoadmapService } from "../src/store";
 import { startViewServer, type ViewServerHandle } from "../src/view";
 import { authFetch } from "./helpers/auth";
+import { sleep } from "./helpers/cli";
 import { buildActivityRepo } from "./fixtures/dashboard-fixtures";
 
 let tempDir: string;
@@ -135,7 +136,7 @@ describe("static export activity", () => {
   test("embeds committed activity anchored to the history, so exports at different times are identical", async () => {
     buildActivityRepo(tempDir);
     const first = await exportStaticHtml(tempDir, { outPath: "-" });
-    await Bun.sleep(1100);
+    await sleep(1100);
     const second = await exportStaticHtml(tempDir, { outPath: "-" });
     expect(second.html).toBe(first.html);
     const json = first.html.match(/<script id="pp-embedded-data" type="application\/json">(.*?)<\/script>/s)![1]!;

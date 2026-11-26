@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildDashboardHtml, buildPortfolioHtml } from "../src/dashboard-html";
 import {
   RADII,
@@ -125,7 +126,7 @@ describe("dashboard design tokens", () => {
   }
 
   test("DESIGN.md documents every token value for both themes and the type scale", () => {
-    const doc = readFileSync(join(import.meta.dir, "..", "DESIGN.md"), "utf8");
+    const doc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "DESIGN.md"), "utf8");
     const missing: string[] = [];
     for (const role of Object.keys(THEME_TOKENS.dark) as (keyof typeof THEME_TOKENS.dark)[]) {
       const row = `| \`--${role}\` | \`${THEME_TOKENS.dark[role]}\` | \`${THEME_TOKENS.light[role]}\` |`;
