@@ -1,0 +1,190 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>A — Tightened dashboard</title><style>
+:root{--bg:#0b0f17;--surface:#121826;--surface2:#192234;--border:#263147;--text:#e6edf7;--muted:#93a4bd;--accent:#60a5fa;--shipped:#34d399;--in-progress:#60a5fa;--planned:#94a3b8;--paused:#fbbf24;--cut:#f87171;--active:#60a5fa;--slate:#94a3b8}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,p{margin:0}
+.mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.s{--c:var(--slate)}
+.s.shipped{--c:var(--shipped)}.s.in-progress{--c:var(--in-progress)}.s.planned{--c:var(--planned)}
+.s.paused{--c:var(--paused)}.s.cut{--c:var(--cut)}.s.active{--c:var(--active)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;flex:none}
+.word{color:var(--c);font-weight:600;font-size:12px;white-space:nowrap}
+.st{display:inline-flex;align-items:center;white-space:nowrap}
+.track{display:inline-block;width:72px;height:4px;border-radius:2px;background:var(--border);overflow:hidden;vertical-align:middle}
+.track i{display:block;height:100%;background:var(--c,var(--text))}
+.dist-wrap{display:flex;align-items:center;gap:12px}
+.dist{display:inline-flex;width:150px;height:8px;border-radius:4px;overflow:hidden;background:var(--border)}
+.dist i{display:block;height:100%;background:var(--c)}
+.legend{font-size:12px;color:var(--muted);white-space:nowrap}
+.cnt{color:var(--c);font-weight:600}
+.sep{margin:0 6px;color:var(--border)}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:14px 24px 12px;border-bottom:1px solid var(--border)}
+.who{display:flex;align-items:baseline;gap:12px;min-width:0}
+.who h1{font-size:20px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
+.who p{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.right{display:flex;align-items:center;gap:14px;flex:none}
+.ghost{font-size:12px;font-weight:600;color:var(--paused);padding:4px 10px;border:1px solid var(--paused);border-radius:999px;white-space:nowrap}
+.live{font-size:12px;font-weight:600;color:var(--shipped);white-space:nowrap}
+.live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--shipped);margin-right:6px}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 24px;border-bottom:1px solid var(--border)}
+.tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--border);border-radius:8px}
+.tabs a{padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:var(--muted)}
+.tabs a.on{color:var(--text);background:var(--surface2)}
+.filters{display:flex;align-items:center;gap:8px}
+.field{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--muted);white-space:nowrap}
+.field b{color:var(--text);font-weight:500;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.field i{font-style:normal;color:var(--muted);font-size:10px}
+.field.search{width:200px;color:var(--muted)}
+.check{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.box{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--border)}
+.box.on{background:var(--text)}
+
+.milestone{padding:18px 24px 6px}
+  .sec-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+  .sec-head h2{font-size:16px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52%}
+  .grow{flex:1}
+  .track.ship{--c:var(--shipped);width:120px}
+  .sec-desc{color:var(--muted);font-size:13px;padding:8px 0 12px;max-width:90ch}
+  .sec-desc.empty{padding:14px 0 20px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;padding-bottom:14px}
+  .card{display:flex;flex-direction:column;gap:7px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+  .card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .card h3{font-size:14px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .card .desc{color:var(--muted);font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .card .meta{display:flex;align-items:center;gap:10px}
+  .card .track.c{--c:var(--c)}
+  .card .needs{color:var(--muted)}
+  .tabs a.on{color:var(--accent)}
+</style></head><body><header class="bar">
+  <div class="who"><h1>Aurora</h1><p>Collaborative writing workspace with offline support, real-time co-editing, and a plugin platform for teams.</p></div>
+  <div class="right"><div class="dist-wrap"><span class="dist"><i class="s shipped" style="flex:3" title="shipped 3"></i><i class="s in-progress" style="flex:2" title="in progress 2"></i><i class="s planned" style="flex:5" title="planned 5"></i><i class="s paused" style="flex:1" title="paused 1"></i><i class="s cut" style="flex:1" title="cut 1"></i></span><span class="legend"><span class="s shipped cnt">3 shipped</span><span class="sep">·</span><span class="s in-progress cnt">2 in progress</span><span class="sep">·</span><span class="s planned cnt">5 planned</span><span class="sep">·</span><span class="s paused cnt">1 paused</span><span class="sep">·</span><span class="s cut cnt">1 cut</span></span></div><span class="ghost">1 warning</span><span class="live"><i></i>Live</span></div>
+</header><nav class="toolbar">
+  <div class="tabs"><a class="on">Cards</a><a>Graph</a><a>Board</a></div>
+  <div class="filters">
+    <span class="field">Milestone <b>All</b><i>▾</i></span>
+    <span class="field">Status <b>All</b><i>▾</i></span>
+    <span class="field">Area <b>All</b><i>▾</i></span>
+    <span class="field search">Filter features…</span>
+    <label class="check"><i class="box on"></i>Deps</label>
+  </div>
+</nav><main><section class="milestone">
+  <div class="sec-head">
+    <h2>v1.0 — Foundations</h2><span class="mono">v1.0</span><span class="st s shipped"><i class="dot"></i><span class="word">shipped</span></span>
+    <span class="mono">2026-Q1</span>
+    <span class="grow"></span>
+    <span class="mono">3/4 shipped</span><span class="track ship"><i style="width:75%"></i></span>
+  </div>
+  <p class="sec-desc">Core editing engine, accounts, and the sync layer everything else stands on.</p>
+  <div class="cards"><article class="card s shipped">
+  <div class="top"><h3 title="CRDT Core">CRDT Core</h3><span class="st s shipped"><i class="dot"></i><span class="word">shipped</span></span></div>
+  <div class="mono">crdt-core · Core</div>
+  <p class="desc">Fixed a tombstone GC bug that surfaced only above 500k ops.</p>
+  <div class="meta"><span class="mono">0/3 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article><article class="card s shipped">
+  <div class="top"><h3 title="WebSocket Gateway">WebSocket Gateway</h3><span class="st s shipped"><i class="dot"></i><span class="word">shipped</span></span></div>
+  <div class="mono">websocket-gateway · Core</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article><article class="card s shipped">
+  <div class="top"><h3 title="Audit Log">Audit Log</h3><span class="st s shipped"><i class="dot"></i><span class="word">shipped</span></span></div>
+  <div class="mono">audit-log · Platform & Infrastructure</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  <div class="mono needs">needs crdt-core</div>
+</article><article class="card s cut">
+  <div class="top"><h3 title="Legacy CSV Exporter">Legacy CSV Exporter</h3><span class="st s cut"><i class="dot"></i><span class="word">cut</span></span></div>
+  <div class="mono">legacy-exporter · Core</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article></div>
+</section><section class="milestone">
+  <div class="sec-head">
+    <h2>v1.1 — Collaboration</h2><span class="mono">v1.1</span><span class="st s active"><i class="dot"></i><span class="word">active</span></span>
+    <span class="mono">2026-Q2</span>
+    <span class="grow"></span>
+    <span class="mono">0/4 shipped</span><span class="track ship"><i style="width:0%"></i></span>
+  </div>
+  <p class="sec-desc">Real-time presence, comments, and shared workspaces. Shipping is gated on SSO finishing.</p>
+  <div class="cards"><article class="card s paused">
+  <div class="top"><h3 title="Single Sign-On">Single Sign-On</h3><span class="st s paused"><i class="dot"></i><span class="word">paused</span></span></div>
+  <div class="mono">auth-sso · Core</div>
+  <p class="desc">Paused pending legal review of the IdP data-processing addendum.</p>
+  <div class="meta"><span class="mono">1/3 criteria</span><span class="track c"><i style="width:33%"></i></span></div>
+  <div class="mono needs">needs crdt-core</div>
+</article><article class="card s in-progress">
+  <div class="top"><h3 title="Real-time collaborative editing with live presence, inline comment threads, and conflict-free merging across many simultaneous editors">Real-time collaborative editing with live presence, inline comment threads, and conflict-free merging across many simultaneous editors</h3><span class="st s in-progress"><i class="dot"></i><span class="word">in progress</span></span></div>
+  <div class="mono">realtime-collab · Editor</div>
+  <p class="desc">Load run 1: 50 writers held, p95 grew to 240ms after 10 minutes.</p>
+  <div class="meta"><span class="mono">3/6 criteria</span><span class="track c"><i style="width:50%"></i></span></div>
+  <div class="mono needs">needs crdt-core, websocket-gateway, auth-sso</div>
+</article><article class="card s in-progress">
+  <div class="top"><h3 title="Usage-based Billing">Usage-based Billing</h3><span class="st s in-progress"><i class="dot"></i><span class="word">in progress</span></span></div>
+  <div class="mono">billing · Billing</div>
+  
+  <div class="meta"><span class="mono">1/2 criteria</span><span class="track c"><i style="width:50%"></i></span></div>
+  <div class="mono needs">needs auth-sso</div>
+</article><article class="card s planned">
+  <div class="top"><h3 title="Team Templates">Team Templates</h3><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span></div>
+  <div class="mono">broken-dep · Editor</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article></div>
+</section><section class="milestone">
+  <div class="sec-head">
+    <h2>v1.2 — A Deliberately Long Milestone Title That Exercises How Wrapping Behaves</h2><span class="mono">v1.2</span><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span>
+    <span class="mono">2026-Q3</span>
+    <span class="grow"></span>
+    <span class="mono">0/3 shipped</span><span class="track ship"><i style="width:0%"></i></span>
+  </div>
+  
+  <div class="cards"><article class="card s planned">
+  <div class="top"><h3 title="Offline Mode">Offline Mode</h3><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span></div>
+  <div class="mono">offline-mode · Editor</div>
+  
+  <div class="meta"><span class="mono">0/4 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  <div class="mono needs">needs realtime-collab</div>
+</article><article class="card s planned">
+  <div class="top"><h3 title="Mobile App">Mobile App</h3><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span></div>
+  <div class="mono">mobile-app</div>
+  
+  <div class="meta"><span class="mono">no criteria</span></div>
+  
+</article><article class="card s planned">
+  <div class="top"><h3 title="通知センター (Notification Center) 📣">通知センター (Notification Center) 📣</h3><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span></div>
+  <div class="mono">notification-center · UX</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article></div>
+</section><section class="milestone">
+  <div class="sec-head">
+    <h2>v2.0 — Platform</h2><span class="mono">v2.0</span><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span>
+    <span class="mono">2027</span>
+    <span class="grow"></span>
+    <span class="mono">0/0 shipped</span><span class="track ship"><i style="width:0%"></i></span>
+  </div>
+  
+  <p class="sec-desc empty">No features yet.</p>
+</section><section class="milestone">
+  <div class="sec-head">
+    <h2>backlog — Backlog</h2><span class="mono">backlog</span><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span>
+    
+    <span class="grow"></span>
+    <span class="mono">0/1 shipped</span><span class="track ship"><i style="width:0%"></i></span>
+  </div>
+  
+  <div class="cards"><article class="card s planned">
+  <div class="top"><h3 title="Full-text Search Index">Full-text Search Index</h3><span class="st s planned"><i class="dot"></i><span class="word">planned</span></span></div>
+  <div class="mono">search-index · Platform & Infrastructure</div>
+  
+  <div class="meta"><span class="mono">0/2 criteria</span><span class="track c"><i style="width:0%"></i></span></div>
+  
+</article></div>
+</section></main></body></html>
