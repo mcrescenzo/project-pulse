@@ -225,7 +225,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
       const featureIds = new Set((state.data.features || []).map((f) => f.id));
 
       const bodyHtml = allIssues.length === 0
-        ? '<p style="margin:0;color:var(--green);font-size:0.9rem">All schema, dependency DAG, ROADMAP.md sync, and Beads checks passed with 0 errors and 0 warnings.</p>'
+        ? '<p style="margin:0;color:var(--ok);font-size:var(--fs-base)">All schema, dependency DAG, ROADMAP.md sync, and Beads checks passed with 0 errors and 0 warnings.</p>'
         : '<ul class="health-list">' + allIssues.map(({ level, item }) => {
             const pillClass = level === "error" ? "pill-err" : "pill-warn";
             const jumpBtn = item.entityId && featureIds.has(item.entityId)
@@ -523,7 +523,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
         const done = f.ship_criteria.filter((c) => c.done).length;
         const total = f.ship_criteria.length;
         return '<button type="button" class="graph-node" data-feature-id="' + esc(f.id) + '" style="left:' + p.x + "px;top:" + p.y + "px;width:" + NODE_W + "px;height:" + NODE_H + 'px">' +
-          '<div class="graph-node-top"><span class="graph-node-title">' + esc(f.title) + '</span><span class="pill status-' + esc(f.status) + '" style="padding:2px 7px;font-size:0.7rem">' + esc(f.status) + "</span></div>" +
+          '<div class="graph-node-top"><span class="graph-node-title">' + esc(f.title) + '</span><span class="pill status-' + esc(f.status) + '" style="padding:2px 7px;font-size:var(--fs-xs)">' + esc(f.status) + "</span></div>" +
           '<div class="graph-node-meta"><span>' + esc(f.milestone) + (f.area ? " · " + esc(f.area) : "") + "</span><span>" + done + "/" + total + " criteria</span></div>" +
         "</button>";
       }).join("");
@@ -534,8 +534,8 @@ export const DASHBOARD_CLIENT_SCRIPT = `
             '<div class="graph-legend">' +
               '<span>Hover or focus a feature to trace dependencies · Drag to pan · Scroll to zoom</span>' +
               '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span> Selected</span>' +
-              '<span class="legend-item"><span class="legend-swatch" style="background:var(--amber)"></span> Upstream prerequisites</span>' +
-              '<span class="legend-item"><span class="legend-swatch" style="background:var(--green)"></span> Downstream dependents</span>' +
+              '<span class="legend-item"><span class="legend-swatch" style="background:var(--trace-up)"></span> Upstream prerequisites</span>' +
+              '<span class="legend-item"><span class="legend-swatch" style="background:var(--trace-down)"></span> Downstream dependents</span>' +
             "</div>" +
             '<div class="graph-controls" role="toolbar" aria-label="Dependency graph zoom controls">' +
               '<button type="button" class="graph-ctrl-btn" id="graph-zoom-out" aria-label="Zoom out" title="Zoom out (-)">−</button>' +
@@ -550,8 +550,8 @@ export const DASHBOARD_CLIENT_SCRIPT = `
                 '<svg class="graph-edges" width="' + stageW + '" height="' + stageH + '" viewBox="0 0 ' + stageW + " " + stageH + '">' +
                   "<defs>" +
                     '<marker id="pp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--muted)" /></marker>' +
-                    '<marker id="pp-arrow-up" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--amber)" /></marker>' +
-                    '<marker id="pp-arrow-down" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--green)" /></marker>' +
+                    '<marker id="pp-arrow-up" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--trace-up)" /></marker>' +
+                    '<marker id="pp-arrow-down" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor" style="color:var(--trace-down)" /></marker>' +
                   "</defs>" +
                   svgPaths +
                 "</svg>" +
@@ -830,7 +830,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
       container.innerHTML = '<div class="board-grid">' + columns.map((colStatus) => {
         const colFeatures = filteredFeatures.filter((f) => f.status === colStatus);
         const cards = colFeatures.length === 0
-          ? '<p class="empty-msg" style="font-size:0.82rem;margin:6px 0">No features</p>'
+          ? '<p class="empty-msg" style="font-size:var(--fs-sm);margin:6px 0">No features</p>'
           : colFeatures.map((f) => {
               const done = f.ship_criteria.filter((c) => c.done).length;
               const total = f.ship_criteria.length;
@@ -1002,7 +1002,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `
       const statusBlock = isStatic
         ? '<div><div class="section-label">Status</div><span class="pill status-' + esc(feature.status) + '">' + esc(feature.status) + "</span></div>"
         : '<div><label class="section-label" for="drawer-status">Status</label>' +
-            '<select id="drawer-status" aria-label="Feature status" style="width:100%;padding:8px;border-radius:8px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);font-family:inherit">' +
+            '<select id="drawer-status" aria-label="Feature status" style="width:100%;padding:8px;border-radius:var(--radius);background:var(--surface-2);color:var(--text);border:1px solid var(--border);font-family:inherit">' +
               statuses.map((s) => '<option value="' + s + '"' + (s === feature.status ? " selected" : "") + ">" + s + "</option>").join("") +
             "</select></div>";
 

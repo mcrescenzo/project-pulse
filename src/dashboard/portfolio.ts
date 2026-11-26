@@ -33,7 +33,7 @@ export function buildPortfolioHtml(): string {
       border-bottom: 1px solid var(--border);
       margin-bottom: 24px;
     }
-    h1 { margin: 0; font-size: 1.85rem; letter-spacing: -0.02em; }
+    h1 { margin: 0; font-size: var(--fs-xl); letter-spacing: -0.02em; }
     .subtitle { margin: 6px 0 0; color: var(--muted); }
     .header-actions { display: flex; gap: 10px; align-items: center; }
     .pill {
@@ -41,23 +41,23 @@ export function buildPortfolioHtml(): string {
       align-items: center;
       gap: 6px;
       padding: 5px 11px;
-      border-radius: 999px;
-      font-size: 0.78rem;
+      border-radius: var(--radius-sm);
+      font-size: var(--fs-xs);
       font-weight: 600;
       white-space: nowrap;
       flex-shrink: 0;
     }
-    .pill-live { background: var(--green-soft); color: var(--green); }
-    .pill-live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
-    .pill-err { background: var(--red-soft); color: var(--red); }
+    .pill-live { background: var(--live-soft); color: var(--live); }
+    .pill-live .dot { width: 8px; height: 8px; border-radius: var(--radius-sm); background: var(--live); }
+    .pill-err { background: var(--danger-soft); color: var(--danger); }
     .icon-btn {
       padding: 6px 12px;
-      border-radius: 999px;
+      border-radius: var(--radius-sm);
       background: var(--surface);
       color: var(--text);
       border: 1px solid var(--border);
       cursor: pointer;
-      font-size: 0.8rem;
+      font-size: var(--fs-xs);
       font-weight: 600;
       font-family: inherit;
     }
@@ -77,40 +77,40 @@ export function buildPortfolioHtml(): string {
     }
     .project-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
     .project-top > div { min-width: 0; }
-    .project-title { font-size: 1.15rem; font-weight: 700; margin: 0; }
+    .project-title { font-size: var(--fs-lg); font-weight: 700; margin: 0; }
     .project-path {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.74rem;
+      font-size: var(--fs-xs);
       color: var(--muted);
       word-break: break-all;
       margin-top: 2px;
     }
-    .project-summary { margin: 0; color: var(--muted); font-size: 0.88rem; }
-    .progress-track { width: 100%; height: 7px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
-    .progress-fill { height: 100%; background: var(--green); }
-    .project-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--muted); }
+    .project-summary { margin: 0; color: var(--muted); font-size: var(--fs-base); }
+    .progress-track { width: 100%; height: 7px; background: var(--surface-2); border-radius: var(--radius-sm); overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--st-shipped); }
+    .project-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: var(--fs-xs); color: var(--muted); }
     .project-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
     .btn-open {
       display: inline-block;
       padding: 7px 14px;
-      border-radius: 8px;
+      border-radius: var(--radius);
       background: var(--accent);
-      color: #fff;
+      color: var(--on-accent);
       text-decoration: none;
-      font-size: 0.85rem;
+      font-size: var(--fs-sm);
       font-weight: 600;
     }
     .btn-remove {
       padding: 6px 10px;
-      border-radius: 8px;
+      border-radius: var(--radius);
       background: transparent;
       color: var(--muted);
       border: 1px solid var(--border);
       cursor: pointer;
-      font-size: 0.8rem;
+      font-size: var(--fs-xs);
       font-family: inherit;
     }
-    .btn-remove:hover { color: var(--red); border-color: var(--red); }
+    .btn-remove:hover { color: var(--danger); border-color: var(--danger); }
     .empty { color: var(--muted); font-style: italic; }
   </style>
 </head>
