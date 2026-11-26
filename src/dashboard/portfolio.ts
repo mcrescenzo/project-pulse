@@ -1,0 +1,205 @@
+import { EARLY_THEME_SCRIPT, FAVICON_DATA_URL, SHARED_THEME_CSS } from "./theme";
+
+/**
+ * Builds the multi-project hub portfolio overview page served at `/`.
+ */
+export function buildPortfolioHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Pulse — Portfolio Hub</title>
+  <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URL}" />
+  ${EARLY_THEME_SCRIPT}
+  <style>
+    ${SHARED_THEME_CSS}
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container { max-width: 1120px; margin: 0 auto; padding: 32px 24px 64px; }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    h1 { margin: 0; font-size: 1.85rem; letter-spacing: -0.02em; }
+    .subtitle { margin: 6px 0 0; color: var(--muted); }
+    .header-actions { display: flex; gap: 10px; align-items: center; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .pill-live { background: var(--green-soft); color: var(--green); }
+    .pill-live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .pill-err { background: var(--red-soft); color: var(--red); }
+    .icon-btn {
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      font-family: inherit;
+    }
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .project-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .project-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .project-top > div { min-width: 0; }
+    .project-title { font-size: 1.15rem; font-weight: 700; margin: 0; }
+    .project-path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.74rem;
+      color: var(--muted);
+      word-break: break-all;
+      margin-top: 2px;
+    }
+    .project-summary { margin: 0; color: var(--muted); font-size: 0.88rem; }
+    .progress-track { width: 100%; height: 7px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--green); }
+    .project-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--muted); }
+    .project-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+    .btn-open {
+      display: inline-block;
+      padding: 7px 14px;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .btn-remove {
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+    .btn-remove:hover { color: var(--red); border-color: var(--red); }
+    .empty { color: var(--muted); font-style: italic; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Project Pulse Hub</h1>
+        <p class="subtitle">Local portfolio overview across your active repository roadmaps.</p>
+      </div>
+      <div class="header-actions">
+        <span class="pill pill-live"><span class="dot"></span> Hub Active</span>
+        <button type="button" class="icon-btn" id="theme-toggle">Theme</button>
+      </div>
+    </header>
+    <main id="projects" class="projects-grid"></main>
+  </div>
+
+  <script>
+    function esc(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+    function getEffectiveTheme() {
+      const explicit = document.documentElement.dataset.theme;
+      if (explicit === "light" || explicit === "dark") return explicit;
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    function syncThemeButton() {
+      const eff = getEffectiveTheme();
+      document.getElementById("theme-toggle").textContent = eff === "light" ? "Light theme" : "Dark theme";
+    }
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+      const next = getEffectiveTheme() === "light" ? "dark" : "light";
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem("pp-theme", next); } catch {}
+      syncThemeButton();
+    });
+    syncThemeButton();
+
+    async function loadProjects() {
+      const container = document.getElementById("projects");
+      const res = await fetch("/api/hub/projects");
+      if (!res.ok) {
+        container.innerHTML = '<p class="empty">Failed to load hub projects.</p>';
+        return;
+      }
+      const data = await res.json();
+      const projects = data.projects || [];
+      if (projects.length === 0) {
+        container.innerHTML = '<p class="empty">No repositories registered yet. Run <code>pp view</code> inside any Project Pulse repository.</p>';
+        return;
+      }
+      container.innerHTML = projects.map((p) => {
+        const total = p.totals.features || 0;
+        const shipped = p.totals.shipped || 0;
+        const pct = total ? Math.round((shipped / total) * 100) : 0;
+        const healthPill = p.check && p.check.ok
+          ? '<span class="pill pill-live">Check OK</span>'
+          : '<span class="pill pill-err">' + ((p.check && p.check.errorCount) || 1) + " error(s)</span>";
+        return '<article class="project-card" data-project-slug="' + esc(p.slug) + '">' +
+          '<div class="project-top"><div><h2 class="project-title">' + esc(p.name) + '</h2><div class="project-path">' + esc(p.rootDir) + "</div></div>" + healthPill + "</div>" +
+          (p.summary ? '<p class="project-summary">' + esc(p.summary) + "</p>" : "") +
+          '<div class="progress-track"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="project-meta"><span>' + shipped + "/" + total + " shipped (" + pct + "%)</span><span>" + (p.totals.milestones || 0) + " milestone(s)</span><span>" + (p.totals.inProgress || 0) + " in progress</span></div>" +
+          '<div class="project-actions"><a class="btn-open" href="' + esc(p.url) + '">Open Dashboard</a><button type="button" class="btn-remove" data-remove-slug="' + esc(p.slug) + '">Remove</button></div>' +
+        "</article>";
+      }).join("");
+
+      container.querySelectorAll("[data-remove-slug]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const slug = btn.getAttribute("data-remove-slug");
+          if (!slug) return;
+          const r = await fetch("/api/hub/projects/" + encodeURIComponent(slug) + "/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          if (r.ok) loadProjects();
+        });
+      });
+    }
+
+    loadProjects();
+  </script>
+</body>
+</html>`;
+}
